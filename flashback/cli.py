@@ -1,0 +1,155 @@
+"""Command-line interface for flashback."""
+
+import argparse
+import sys
+from datetime import date
+from pathlib import Path
+
+from . import __version__
+from .parser import ParseError, parse_deck
+from .scheduler import Grade
+from .storage import deck_stats, due_cards, open_db, record_review, sync_deck
+
+GRADE_KEYS = {
+    "1": Grade.AGAIN,
+    "2": Grade.HARD,
+    "3": Grade.GOOD,
+    "4": Grade.EASY,
+    "again": Grade.AGAIN,
+    "hard": Grade.HARD,
+    "good": Grade.GOOD,
+    "easy": Grade.EASY,
+}
+
+
+def _db_path(args) -> Path:
+    return Path(args.state_dir) / "state.sqlite3"
+
+
+def cmd_sync(args):
+    decks_dir = Path(args.decks_dir)
+    if not decks_dir.is_dir():
+        print(f"no such directory: {decks_dir}", file=sys.stderr)
+        return 1
+
+    today = date.today()
+    with open_db(_db_path(args)) as conn:
+        total_added = total_removed = 0
+        for deck_file in sorted(decks_dir.glob("*.md")):
+            deck_name = deck_file.stem
+            try:
+                cards = parse_deck(deck_file.read_text(encoding="utf-8"))
+            except ParseError as exc:
+                print(f"skipping {deck_file}: {exc}", file=sys.stderr)
+                continue
+            added, removed = sync_deck(conn, deck_name, cards, today)
+            total_added += added
+            total_removed += removed
+            print(f"{deck_name}: {len(cards)} cards ({added} new, {removed} removed)")
+    print(f"synced. {total_added} new, {total_removed} removed total.")
+    return 0
+
+
+def cmd_due(args):
+    today = date.today()
+    with open_db(_db_path(args)) as conn:
+        rows = due_cards(conn, today, args.deck)
+    if not rows:
+        print("nothing due. go outside.")
+        return 0
+    by_deck = {}
+    for row in rows:
+        by_deck[row["deck"]] = by_deck.get(row["deck"], 0) + 1
+    for deck, count in sorted(by_deck.items()):
+        print(f"{deck}: {count} due")
+    return 0
+
+
+def cmd_stats(args):
+    today = date.today()
+    with open_db(_db_path(args)) as conn:
+        rows = deck_stats(conn, today)
+    if not rows:
+        print("no decks yet. run `flashback sync` first.")
+        return 0
+    print(f"{'deck':<20} {'total':>6} {'due':>6}")
+    for row in rows:
+        print(f"{row['deck']:<20} {row['total']:>6} {row['due'] or 0:>6}")
+    return 0
+
+
+def cmd_review(args):
+    today = date.today()
+    with open_db(_db_path(args)) as conn:
+        rows = due_cards(conn, today, args.deck)
+        if not rows:
+            print("nothing due. go outside.")
+            return 0
+
+        print(f"{len(rows)} card(s) due. (again=1, hard=2, good=3, easy=4, q=quit)\n")
+        reviewed = 0
+        for row in rows:
+            print(f"[{row['deck']}]")
+            print(f"Q: {row['question']}")
+            input("  (press enter to reveal answer) ")
+            print(f"A: {row['answer']}")
+
+            grade = None
+            while grade is None:
+                raw = input("  how did you do? [again/hard/good/easy/q] ").strip().lower()
+                if raw in ("q", "quit"):
+                    print(f"\nstopped after {reviewed} card(s).")
+                    return 0
+                grade = GRADE_KEYS.get(raw)
+                if grade is None:
+                    print("  please enter again, hard, good, easy, or q")
+
+            due = record_review(conn, row, grade, today)
+            print(f"  next review: {due.isoformat()}\n")
+            reviewed += 1
+
+        print(f"done. reviewed {reviewed} card(s).")
+    return 0
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="flashback", description="A plain-text, spaced-repetition flashcard tool."
+    )
+    parser.add_argument("--version", action="version", version=f"flashback {__version__}")
+    parser.add_argument(
+        "--decks-dir", default="decks", help="directory of *.md deck files (default: ./decks)"
+    )
+    parser.add_argument(
+        "--state-dir",
+        default=".flashback",
+        help="directory to store review state (default: ./.flashback)",
+    )
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_sync = sub.add_parser("sync", help="load deck files into the review database")
+    p_sync.set_defaults(func=cmd_sync)
+
+    p_due = sub.add_parser("due", help="show how many cards are due, per deck")
+    p_due.add_argument("--deck", help="limit to a single deck")
+    p_due.set_defaults(func=cmd_due)
+
+    p_review = sub.add_parser("review", help="review due cards")
+    p_review.add_argument("--deck", help="limit to a single deck")
+    p_review.set_defaults(func=cmd_review)
+
+    p_stats = sub.add_parser("stats", help="show per-deck totals")
+    p_stats.set_defaults(func=cmd_stats)
+
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
