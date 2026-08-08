@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 
 from . import __version__
-from .parser import ParseError, parse_deck
+from .parser import ParseError, append_card, parse_deck
 from .scheduler import Grade
 from .storage import deck_stats, due_cards, open_db, record_review, sync_deck
 
@@ -47,6 +47,26 @@ def cmd_sync(args):
             total_removed += removed
             print(f"{deck_name}: {len(cards)} cards ({added} new, {removed} removed)")
     print(f"synced. {total_added} new, {total_removed} removed total.")
+    return 0
+
+
+def cmd_add(args):
+    decks_dir = Path(args.decks_dir)
+    decks_dir.mkdir(parents=True, exist_ok=True)
+    deck_path = decks_dir / f"{args.deck}.md"
+
+    question = args.question if args.question is not None else input("Q: ")
+    answer = args.answer if args.answer is not None else input("A: ")
+
+    existing_text = deck_path.read_text(encoding="utf-8") if deck_path.exists() else ""
+    try:
+        new_text = append_card(existing_text, question, answer)
+    except ParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    deck_path.write_text(new_text, encoding="utf-8")
+    print(f"added to {deck_path} (run `flashback sync` to pick it up)")
     return 0
 
 
@@ -130,6 +150,14 @@ def build_parser():
 
     p_sync = sub.add_parser("sync", help="load deck files into the review database")
     p_sync.set_defaults(func=cmd_sync)
+
+    p_add = sub.add_parser(
+        "add", help="add a card to a deck file (creates it if it doesn't exist)"
+    )
+    p_add.add_argument("deck", help="deck name (the deck file's stem, e.g. 'spanish-basics')")
+    p_add.add_argument("-q", "--question", help="the question (prompted for if omitted)")
+    p_add.add_argument("-a", "--answer", help="the answer (prompted for if omitted)")
+    p_add.set_defaults(func=cmd_add)
 
     p_due = sub.add_parser("due", help="show how many cards are due, per deck")
     p_due.add_argument("--deck", help="limit to a single deck")

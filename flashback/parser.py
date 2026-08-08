@@ -71,3 +71,24 @@ def _parse_card(block: str) -> Card:
         raise ParseError(f"card has no answer for question: {question!r}")
 
     return Card(question=question, answer=answer)
+
+
+def append_card(existing_text: str, question: str, answer: str) -> str:
+    """Return deck file text with a new card appended.
+
+    Adds a `---` separator before the new card if the file already has
+    content, so this can be used both to create a deck file from scratch
+    and to add a card to an existing one.
+    """
+    question = question.strip()
+    answer = answer.strip()
+    if not question:
+        raise ParseError("question cannot be empty")
+    if not answer:
+        raise ParseError("answer cannot be empty")
+
+    card_text = f"Q: {question}\nA: {answer}\n"
+    existing = existing_text.rstrip()
+    if not existing:
+        return card_text
+    return f"{existing}\n\n---\n\n{card_text}"

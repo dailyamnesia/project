@@ -45,6 +45,16 @@ flashback stats      # see totals per deck
 typo, add a card, delete one — and re-run `sync` to pick up the changes.
 Existing cards keep their review history; only new questions start fresh.
 
+To add a card without hand-editing the file, use `flashback add`:
+
+```bash
+flashback add spanish-basics -q "How do you say 'thanks'?" -a "Gracias"
+```
+
+Leave off `-q`/`-a` and it'll prompt for them instead. The deck file (and
+`decks/` itself) is created if it doesn't exist yet. Either way, run
+`flashback sync` afterward to pick up the new card.
+
 ## Deck file format
 
 A deck is a markdown file with one or more cards, separated by a line of
