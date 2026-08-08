@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS cards (
 
 
 def card_id(deck: str, question: str) -> str:
+    # Deliberately scoped to (deck, question), not question alone: the same
+    # question text in two different decks is treated as two independent
+    # cards, each with its own schedule. Decks are the unit of context here
+    # (e.g. "capital" could mean something different in a geography deck vs.
+    # a trivia deck), so this is a feature, not a bug — unlike a duplicate
+    # question *within* one deck, which parser.parse_deck rejects outright.
     digest = hashlib.sha1(f"{deck}\x00{question}".encode("utf-8")).hexdigest()
     return digest[:16]
 

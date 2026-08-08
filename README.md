@@ -75,6 +75,12 @@ part of the question until an `A:` line starts, and everything after that
 is the answer, until the next card. One file = one deck; the filename
 (minus `.md`) is the deck's name.
 
+Two cards with the identical question text *within the same deck file*
+aren't allowed — `sync` will refuse that file with an error, rather than
+silently keeping only one of them. The same question text in *different*
+decks is fine and intentional: each deck is its own context, so those are
+treated as two independent cards with independent schedules.
+
 ## How scheduling works
 
 Each card tracks three numbers: how many times in a row you've recalled it

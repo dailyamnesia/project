@@ -39,6 +39,19 @@ class TestParser(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_deck("A: answer with no question")
 
+    def test_duplicate_question_in_same_deck_raises(self):
+        text = "Q: hola\nA: hi\n---\nQ: hola\nA: hello (again)\n"
+        with self.assertRaises(ParseError):
+            parse_deck(text)
+
+    def test_same_question_in_different_decks_is_fine(self):
+        # parse_deck only sees one file at a time, so this isn't a duplicate
+        # from its point of view — cross-deck duplicates are a separate,
+        # deliberate design choice (see storage.card_id).
+        cards_a = parse_deck("Q: hola\nA: hi\n")
+        cards_b = parse_deck("Q: hola\nA: hi\n")
+        self.assertEqual(cards_a, cards_b)
+
 
 class TestAppendCard(unittest.TestCase):
     def test_appends_to_empty_text_with_no_separator(self):

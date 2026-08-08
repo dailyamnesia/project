@@ -45,6 +45,17 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(row["answer"], "one")
             self.assertEqual(row["repetitions"], 1)
 
+    def test_same_question_in_different_decks_are_independent_cards(self):
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "geography", parse_deck("Q: capital?\nA: Paris\n"), today)
+            sync_deck(conn, "trivia", parse_deck("Q: capital?\nA: a large sum, informally\n"), today)
+            rows = due_cards(conn, today)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual({r["deck"] for r in rows}, {"geography", "trivia"})
+            self.assertEqual({r["id"] for r in rows}, {rows[0]["id"], rows[1]["id"]})
+            self.assertNotEqual(rows[0]["id"], rows[1]["id"])
+
     def test_record_review_pushes_due_date_forward(self):
         today = date(2026, 1, 1)
         with open_db(self.db_path) as conn:

@@ -36,11 +36,20 @@ class ParseError(ValueError):
 
 def parse_deck(text: str) -> list[Card]:
     cards = []
+    seen_questions = set()
     for block in CARD_SEPARATOR.split(text):
         block = block.strip()
         if not block:
             continue
-        cards.append(_parse_card(block))
+        card = _parse_card(block)
+        if card.question in seen_questions:
+            raise ParseError(
+                f"duplicate question in this deck: {card.question!r} — "
+                "each card's question must be unique within a deck file, since "
+                "review history is keyed on deck + question"
+            )
+        seen_questions.add(card.question)
+        cards.append(card)
     return cards
 
 
