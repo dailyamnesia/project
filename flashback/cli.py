@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 
 from . import __version__
-from .parser import ParseError, append_card, parse_deck
+from .parser import ParseError, append_card, parse_deck, remove_card
 from .scheduler import Grade
 from .storage import deck_stats, due_cards, open_db, record_review, sync_deck
 
@@ -67,6 +67,30 @@ def cmd_add(args):
 
     deck_path.write_text(new_text, encoding="utf-8")
     print(f"added to {deck_path} (run `flashback sync` to pick it up)")
+    return 0
+
+
+def cmd_remove(args):
+    decks_dir = Path(args.decks_dir)
+    deck_path = decks_dir / f"{args.deck}.md"
+    if not deck_path.exists():
+        print(f"no such deck: {deck_path}", file=sys.stderr)
+        return 1
+
+    question = args.question if args.question is not None else input("Q: ")
+
+    existing_text = deck_path.read_text(encoding="utf-8")
+    try:
+        new_text = remove_card(existing_text, question)
+    except ParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    deck_path.write_text(new_text, encoding="utf-8")
+    print(
+        f"removed from {deck_path} (run `flashback sync` to pick it up — "
+        "this card's review history will be deleted on next sync)"
+    )
     return 0
 
 
@@ -158,6 +182,11 @@ def build_parser():
     p_add.add_argument("-q", "--question", help="the question (prompted for if omitted)")
     p_add.add_argument("-a", "--answer", help="the answer (prompted for if omitted)")
     p_add.set_defaults(func=cmd_add)
+
+    p_remove = sub.add_parser("remove", help="remove a card from a deck file, by question")
+    p_remove.add_argument("deck", help="deck name (the deck file's stem, e.g. 'spanish-basics')")
+    p_remove.add_argument("-q", "--question", help="the question to remove (prompted for if omitted)")
+    p_remove.set_defaults(func=cmd_remove)
 
     p_due = sub.add_parser("due", help="show how many cards are due, per deck")
     p_due.add_argument("--deck", help="limit to a single deck")

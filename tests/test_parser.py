@@ -1,6 +1,6 @@
 import unittest
 
-from flashback.parser import Card, ParseError, append_card, parse_deck
+from flashback.parser import Card, ParseError, append_card, parse_deck, remove_card
 
 
 class TestParser(unittest.TestCase):
@@ -82,6 +82,42 @@ class TestAppendCard(unittest.TestCase):
     def test_empty_answer_raises(self):
         with self.assertRaises(ParseError):
             append_card("", "question", "   ")
+
+
+class TestRemoveCard(unittest.TestCase):
+    def test_removes_the_matching_card(self):
+        text = "Q: 2+2?\nA: 4\n---\nQ: 3+3?\nA: 6\n"
+        text = remove_card(text, "2+2?")
+        cards = parse_deck(text)
+        self.assertEqual(cards, [Card(question="3+3?", answer="6")])
+
+    def test_removes_last_remaining_card(self):
+        text = remove_card("Q: 2+2?\nA: 4\n", "2+2?")
+        self.assertEqual(parse_deck(text), [])
+
+    def test_leaves_other_cards_untouched_and_in_order(self):
+        text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n---\nQ: c\nA: 3\n"
+        text = remove_card(text, "b")
+        cards = parse_deck(text)
+        self.assertEqual([c.question for c in cards], ["a", "c"])
+
+    def test_matches_after_stripping_whitespace(self):
+        text = "Q: 2+2?\nA: 4\n"
+        text = remove_card(text, "  2+2?  ")
+        self.assertEqual(parse_deck(text), [])
+
+    def test_no_matching_question_raises(self):
+        with self.assertRaises(ParseError):
+            remove_card("Q: 2+2?\nA: 4\n", "not in this deck")
+
+    def test_no_matching_question_leaves_text_semantics_unchanged(self):
+        text = "Q: 2+2?\nA: 4\n"
+        with self.assertRaises(ParseError):
+            remove_card(text, "nope")
+        # the original text itself is untouched (remove_card doesn't mutate
+        # its argument); this just documents that ParseError is raised
+        # before any card is dropped, not partway through.
+        self.assertEqual(parse_deck(text), [Card(question="2+2?", answer="4")])
 
 
 if __name__ == "__main__":

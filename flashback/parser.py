@@ -101,3 +101,23 @@ def append_card(existing_text: str, question: str, answer: str) -> str:
     if not existing:
         return card_text
     return f"{existing}\n\n---\n\n{card_text}"
+
+
+def remove_card(existing_text: str, question: str) -> str:
+    """Return deck file text with the card matching `question` removed.
+
+    Matching is exact after stripping, same as the comparison `card_id`
+    normalizes on. Raises ParseError if no card matches — the caller (or a
+    person hand-editing the file) got the question text wrong, and silently
+    doing nothing would be worse than saying so.
+    """
+    question = question.strip()
+    cards = parse_deck(existing_text)
+    remaining = [card for card in cards if card.question != question]
+    if len(remaining) == len(cards):
+        raise ParseError(f"no card with that question found: {question!r}")
+
+    text = ""
+    for card in remaining:
+        text = append_card(text, card.question, card.answer)
+    return text

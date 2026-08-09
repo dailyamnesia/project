@@ -55,6 +55,18 @@ Leave off `-q`/`-a` and it'll prompt for them instead. The deck file (and
 `decks/` itself) is created if it doesn't exist yet. Either way, run
 `flashback sync` afterward to pick up the new card.
 
+To remove a card by its question, without hand-editing the file, use
+`flashback remove`:
+
+```bash
+flashback remove spanish-basics -q "How do you say 'thanks'?"
+```
+
+Leave off `-q` and it'll prompt instead. It's an error if no card in that
+deck has that exact question. Run `flashback sync` afterward — that's also
+when the card's review history actually gets deleted, same as if you'd
+removed it from the file by hand.
+
 ## Deck file format
 
 A deck is a markdown file with one or more cards, separated by a line of
