@@ -67,6 +67,24 @@ deck has that exact question. Run `flashback sync` afterward — that's also
 when the card's review history actually gets deleted, same as if you'd
 removed it from the file by hand.
 
+To change a card's question and/or answer in place — instead of `remove`
+then `add`, which loses the card's position in the file and makes you
+retype whichever field didn't change — use `flashback edit`:
+
+```bash
+flashback edit spanish-basics -q "How do you say 'thanks'?" --new-answer "Gracias / Muchas gracias"
+```
+
+Leave off `--new-question`/`--new-answer` (and `-q`) and it'll prompt,
+showing you the current question and answer first so you can see what
+you're changing. At least one of `--new-question`/`--new-answer` is
+required; whichever you don't pass is left alone. One thing worth knowing:
+editing only the answer preserves the card's review history on the next
+sync (it's the same card, as far as scheduling is concerned); editing the
+question does not — `flashback sync` treats it as a new card and drops the
+old history, same as a `remove` + `add` would, since review history is
+keyed on the question text.
+
 ## Deck file format
 
 A deck is a markdown file with one or more cards, separated by a line of

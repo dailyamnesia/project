@@ -1,6 +1,6 @@
 import unittest
 
-from flashback.parser import Card, ParseError, append_card, parse_deck, remove_card
+from flashback.parser import Card, ParseError, append_card, edit_card, parse_deck, remove_card
 
 
 class TestParser(unittest.TestCase):
@@ -117,6 +117,52 @@ class TestRemoveCard(unittest.TestCase):
         # the original text itself is untouched (remove_card doesn't mutate
         # its argument); this just documents that ParseError is raised
         # before any card is dropped, not partway through.
+        self.assertEqual(parse_deck(text), [Card(question="2+2?", answer="4")])
+
+
+class TestEditCard(unittest.TestCase):
+    def test_edits_answer_only_and_keeps_position(self):
+        text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n---\nQ: c\nA: 3\n"
+        text = edit_card(text, "b", new_answer="two")
+        cards = parse_deck(text)
+        self.assertEqual([c.question for c in cards], ["a", "b", "c"])
+        self.assertEqual(cards[1].answer, "two")
+
+    def test_edits_question_only(self):
+        text = "Q: 2+2?\nA: 4\n"
+        text = edit_card(text, "2+2?", new_question="what is 2+2?")
+        self.assertEqual(parse_deck(text), [Card(question="what is 2+2?", answer="4")])
+
+    def test_edits_both_question_and_answer(self):
+        text = "Q: 2+2?\nA: 4\n"
+        text = edit_card(text, "2+2?", new_question="2 plus 2?", new_answer="four")
+        self.assertEqual(parse_deck(text), [Card(question="2 plus 2?", answer="four")])
+
+    def test_no_matching_question_raises(self):
+        with self.assertRaises(ParseError):
+            edit_card("Q: 2+2?\nA: 4\n", "not there", new_answer="x")
+
+    def test_no_new_fields_raises(self):
+        with self.assertRaises(ParseError):
+            edit_card("Q: 2+2?\nA: 4\n", "2+2?")
+
+    def test_empty_new_question_raises(self):
+        with self.assertRaises(ParseError):
+            edit_card("Q: 2+2?\nA: 4\n", "2+2?", new_question="   ")
+
+    def test_empty_new_answer_raises(self):
+        with self.assertRaises(ParseError):
+            edit_card("Q: 2+2?\nA: 4\n", "2+2?", new_answer="   ")
+
+    def test_new_question_colliding_with_another_card_raises(self):
+        text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n"
+        with self.assertRaises(ParseError):
+            edit_card(text, "a", new_question="b")
+
+    def test_failure_leaves_text_semantics_unchanged(self):
+        text = "Q: 2+2?\nA: 4\n"
+        with self.assertRaises(ParseError):
+            edit_card(text, "nope", new_answer="x")
         self.assertEqual(parse_deck(text), [Card(question="2+2?", answer="4")])
 
 

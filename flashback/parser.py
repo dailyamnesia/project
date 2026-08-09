@@ -121,3 +121,57 @@ def remove_card(existing_text: str, question: str) -> str:
     for card in remaining:
         text = append_card(text, card.question, card.answer)
     return text
+
+
+def edit_card(
+    existing_text: str, question: str, new_question: str | None = None, new_answer: str | None = None
+) -> str:
+    """Return deck file text with the card matching `question` updated in place.
+
+    Unlike `remove_card` + `append_card`, this preserves the card's position
+    in the file. At least one of `new_question`/`new_answer` must be given;
+    the other field is left as-is. Raises ParseError if no card matches, if
+    the resulting question/answer would be empty, or if a new question
+    collides with another card already in the deck.
+
+    Note for callers: changing the question changes what `storage.card_id`
+    is keyed on, so (like remove + add) it resets that card's review
+    history on the next sync. Changing only the answer does not — the
+    card's id is unaffected, so its schedule carries over.
+    """
+    if new_question is None and new_answer is None:
+        raise ParseError("must provide a new question and/or a new answer to edit")
+
+    question = question.strip()
+    cards = parse_deck(existing_text)
+
+    updated = []
+    found = False
+    for card in cards:
+        if card.question == question:
+            found = True
+            q = new_question.strip() if new_question is not None else card.question
+            a = new_answer.strip() if new_answer is not None else card.answer
+            if not q:
+                raise ParseError("question cannot be empty")
+            if not a:
+                raise ParseError("answer cannot be empty")
+            updated.append(Card(question=q, answer=a))
+        else:
+            updated.append(card)
+    if not found:
+        raise ParseError(f"no card with that question found: {question!r}")
+
+    seen = set()
+    for card in updated:
+        if card.question in seen:
+            raise ParseError(
+                f"duplicate question in this deck: {card.question!r} — "
+                "each card's question must be unique within a deck file"
+            )
+        seen.add(card.question)
+
+    text = ""
+    for card in updated:
+        text = append_card(text, card.question, card.answer)
+    return text

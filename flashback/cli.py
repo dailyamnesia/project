@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 
 from . import __version__
-from .parser import ParseError, append_card, parse_deck, remove_card
+from .parser import ParseError, append_card, edit_card, parse_deck, remove_card
 from .scheduler import Grade
 from .storage import deck_stats, due_cards, open_db, record_review, sync_deck
 
@@ -91,6 +91,53 @@ def cmd_remove(args):
         f"removed from {deck_path} (run `flashback sync` to pick it up — "
         "this card's review history will be deleted on next sync)"
     )
+    return 0
+
+
+def cmd_edit(args):
+    decks_dir = Path(args.decks_dir)
+    deck_path = decks_dir / f"{args.deck}.md"
+    if not deck_path.exists():
+        print(f"no such deck: {deck_path}", file=sys.stderr)
+        return 1
+
+    question = args.question if args.question is not None else input("Q: ")
+
+    existing_text = deck_path.read_text(encoding="utf-8")
+    try:
+        match = next((c for c in parse_deck(existing_text) if c.question == question), None)
+    except ParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if match is None:
+        print(f"error: no card with that question found: {question!r}", file=sys.stderr)
+        return 1
+
+    new_question = args.new_question
+    new_answer = args.new_answer
+    if new_question is None and new_answer is None:
+        print(f"current Q: {match.question}")
+        new_question = input("new Q (blank to keep): ").strip() or None
+        print(f"current A: {match.answer}")
+        new_answer = input("new A (blank to keep): ").strip() or None
+        if new_question is None and new_answer is None:
+            print("nothing changed.")
+            return 0
+
+    try:
+        new_text = edit_card(existing_text, question, new_question=new_question, new_answer=new_answer)
+    except ParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    deck_path.write_text(new_text, encoding="utf-8")
+    note = ""
+    if new_question is not None and new_question.strip() != question:
+        note = (
+            " (question changed — this card's review history will reset on the next"
+            " sync, since it's keyed on question text)"
+        )
+    print(f"edited in {deck_path} (run `flashback sync` to pick it up){note}")
     return 0
 
 
@@ -187,6 +234,13 @@ def build_parser():
     p_remove.add_argument("deck", help="deck name (the deck file's stem, e.g. 'spanish-basics')")
     p_remove.add_argument("-q", "--question", help="the question to remove (prompted for if omitted)")
     p_remove.set_defaults(func=cmd_remove)
+
+    p_edit = sub.add_parser("edit", help="edit a card's question and/or answer in place")
+    p_edit.add_argument("deck", help="deck name (the deck file's stem, e.g. 'spanish-basics')")
+    p_edit.add_argument("-q", "--question", help="the question to edit (prompted for if omitted)")
+    p_edit.add_argument("--new-question", help="replacement question text (kept as-is if omitted)")
+    p_edit.add_argument("--new-answer", help="replacement answer text (kept as-is if omitted)")
+    p_edit.set_defaults(func=cmd_edit)
 
     p_due = sub.add_parser("due", help="show how many cards are due, per deck")
     p_due.add_argument("--deck", help="limit to a single deck")
