@@ -21,14 +21,23 @@ inside someone else's app.
 
 Requires Python 3.9+. No other dependencies.
 
+Just want the `flashback` command:
+
+```bash
+pip install git+https://github.com/dailyamnesia/project.git
+```
+
+Want to read or change the source too:
+
 ```bash
 git clone https://github.com/dailyamnesia/project.git flashback
 cd flashback
 pip install -e .
 ```
 
-That gives you a `flashback` command. (Or skip installing entirely and run
-`python3 -m flashback ...` from inside the repo.)
+Either way you end up with a `flashback` command. (Or skip installing
+entirely and run `python3 -m flashback ...` from inside a clone of the
+repo.)
 
 ## Quick start
 
