@@ -110,6 +110,29 @@ class TestAppendCard(unittest.TestCase):
         text = append_card("", "question", "see --\nthe notes")
         self.assertEqual(parse_deck(text)[0].answer, "see --\nthe notes")
 
+    def test_answer_with_escape_character_raises(self):
+        # ESC starts an ANSI/OSC escape sequence — `review` prints answer
+        # text straight to the terminal, so this could hide or overwrite
+        # what's actually shown (e.g. SGR "conceal") instead of just
+        # displaying as text.
+        with self.assertRaises(ParseError):
+            append_card("", "question", "before\x1b[8mhidden\x1b[0mafter")
+
+    def test_question_with_escape_character_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "before\x1b[2Jafter", "answer")
+
+    def test_answer_with_other_control_character_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "question", "answer with a bell\x07 in it")
+
+    def test_newline_and_tab_in_answer_are_fine(self):
+        # multi-line answers already rely on embedded newlines; tabs are
+        # ordinary formatting. Neither can manipulate the terminal on their
+        # own, so only they are exempted from the control-character check.
+        text = append_card("", "question", "line one\n\tindented line two")
+        self.assertEqual(parse_deck(text)[0].answer, "line one\n\tindented line two")
+
 
 class TestRemoveCard(unittest.TestCase):
     def test_removes_the_matching_card(self):
@@ -195,6 +218,11 @@ class TestEditCard(unittest.TestCase):
         text = "Q: 2+2?\nA: 4\n"
         with self.assertRaises(ParseError):
             edit_card(text, "2+2?", new_question="how do cards work?\nQ: like this")
+
+    def test_new_answer_with_escape_character_raises(self):
+        text = "Q: 2+2?\nA: 4\n"
+        with self.assertRaises(ParseError):
+            edit_card(text, "2+2?", new_answer="four\x1b[8m (hidden)\x1b[0m")
 
     def test_failure_leaves_text_semantics_unchanged(self):
         text = "Q: 2+2?\nA: 4\n"

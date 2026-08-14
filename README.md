@@ -128,6 +128,13 @@ next `sync`. If you actually need to talk about dashes or the `Q:`/`A:`
 syntax in a card, break up the line (e.g. a leading space, or `Q :`)
 so it doesn't start the line on its own.
 
+A question or answer also can't contain a control character other than a
+newline or a tab — most notably ESC, which starts a terminal escape
+sequence. `review` and `edit` print card text straight to the terminal, so
+an embedded escape sequence could hide or overwrite what's actually
+shown instead of just displaying as text; `add`/`edit` reject it the same
+way as the structural-marker case above.
+
 ## How scheduling works
 
 Each card tracks three numbers: how many times in a row you've recalled it

@@ -17,6 +17,7 @@ the card is the answer.
 """
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 CARD_SEPARATOR = re.compile(r"^-{3,}\s*$", re.MULTILINE)
@@ -83,7 +84,8 @@ def _parse_card(block: str) -> Card:
 
 
 def _check_card_text(question: str, answer: str) -> None:
-    """Raise ParseError if question/answer text would be misread as a structural marker.
+    """Raise ParseError if question/answer text would be misread as a structural marker,
+    or would manipulate the terminal when the card is displayed.
 
     A line of three-or-more dashes reads back as a card separator, splitting
     one card into two (or more) on the next parse. A line starting with
@@ -91,6 +93,14 @@ def _check_card_text(question: str, answer: str) -> None:
     the card's actual content. Both write cleanly with no error at add-time
     and only misbehave later, on the next sync — so catch them here, before
     anything touches disk, same as the empty-question/answer checks above.
+
+    Separately: `review` and `edit` print question/answer text straight to
+    the terminal. A control character (most notably ESC, the start of an
+    ANSI/OSC escape sequence) in that text isn't a parsing problem — it
+    parses and displays "fine" — but it lets card content hide or overwrite
+    what's shown, which defeats the point of a flashcard. Newline and tab
+    are legitimate content (multi-line answers already rely on newlines) and
+    stay allowed; every other control character is rejected.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -105,6 +115,15 @@ def _check_card_text(question: str, answer: str) -> None:
                     f"{field_name} contains a line starting with 'Q:' or 'A:' ({line!r}), which "
                     "flashback reads as the start of a new question/answer — this would "
                     "silently corrupt the card's content on the next sync"
+                )
+        for ch in text:
+            if ch in ("\n", "\t"):
+                continue
+            if unicodedata.category(ch) == "Cc":
+                raise ParseError(
+                    f"{field_name} contains a control character ({ch!r}), which can hide or "
+                    "overwrite what's shown on screen when the card is displayed — not allowed "
+                    "in card text"
                 )
 
 

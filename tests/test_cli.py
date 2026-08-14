@@ -73,6 +73,15 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse((self.decks_dir / "syntax.md").exists())
 
+    def test_answer_with_escape_character_is_rejected_without_writing_file(self):
+        # Without this check, this writes successfully and parses fine — the
+        # problem only shows up later, when `review` prints the answer
+        # straight to the terminal and the escape sequence hides or
+        # overwrites part of what's shown instead of just displaying as text.
+        rc = self.run_flashback("add", "trivia", "-q", "capital of France?", "-a", "before\x1b[8mhidden\x1b[0mafter")
+        self.assertEqual(rc, 1)
+        self.assertFalse((self.decks_dir / "trivia.md").exists())
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):
