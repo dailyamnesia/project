@@ -4,6 +4,7 @@ import argparse
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Optional
 
 from . import __version__
 from .parser import ParseError, append_card, edit_card, parse_deck, remove_card
@@ -24,6 +25,19 @@ GRADE_KEYS = {
 
 def _db_path(args) -> Path:
     return Path(args.state_dir) / "state.sqlite3"
+
+
+def _invalid_deck_name(name: str) -> Optional[str]:
+    """Return an error message if `name` can't be used as a deck file's stem, else None.
+
+    A deck name with a path separator either escapes decks-dir silently (`../x`) or
+    lands in a subdirectory `sync`'s non-recursive glob never looks at (`x/y`) — both
+    look like they worked (a success message, a file on disk) but the card never
+    becomes reachable through the tool again.
+    """
+    if "/" in name or "\\" in name or name in (".", ".."):
+        return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
+    return None
 
 
 def cmd_sync(args):
@@ -51,6 +65,11 @@ def cmd_sync(args):
 
 
 def cmd_add(args):
+    error = _invalid_deck_name(args.deck)
+    if error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
     decks_dir = Path(args.decks_dir)
     decks_dir.mkdir(parents=True, exist_ok=True)
     deck_path = decks_dir / f"{args.deck}.md"
@@ -71,6 +90,11 @@ def cmd_add(args):
 
 
 def cmd_remove(args):
+    error = _invalid_deck_name(args.deck)
+    if error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
     decks_dir = Path(args.decks_dir)
     deck_path = decks_dir / f"{args.deck}.md"
     if not deck_path.exists():
@@ -95,6 +119,11 @@ def cmd_remove(args):
 
 
 def cmd_edit(args):
+    error = _invalid_deck_name(args.deck)
+    if error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
     decks_dir = Path(args.decks_dir)
     deck_path = decks_dir / f"{args.deck}.md"
     if not deck_path.exists():

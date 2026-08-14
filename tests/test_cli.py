@@ -42,6 +42,20 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse((self.decks_dir / "spanish.md").exists())
 
+    def test_deck_name_with_slash_is_rejected_instead_of_landing_outside_decks_dir(self):
+        # A slash either escapes decks-dir (`../x`) or lands somewhere `sync`'s
+        # non-recursive glob never looks (`x/y`) — either way the card would look
+        # added (a success message, a file on disk) but never become reachable
+        # again. Reject it up front instead.
+        rc = self.run_flashback("add", "vocab/spanish", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
+    def test_deck_name_of_dotdot_is_rejected(self):
+        rc = self.run_flashback("add", "..", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):
@@ -76,6 +90,10 @@ class TestRemoveCommand(unittest.TestCase):
         rc = self.run_flashback("remove", "spanish", "-q", "not there")
         self.assertEqual(rc, 1)
         self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
+
+    def test_deck_name_with_slash_is_rejected(self):
+        rc = self.run_flashback("remove", "vocab/spanish", "-q", "hello?")
+        self.assertEqual(rc, 1)
 
 
 class TestEditCommand(unittest.TestCase):
@@ -121,6 +139,10 @@ class TestEditCommand(unittest.TestCase):
         rc = self.run_flashback("edit", "spanish", "-q", "not there", "--new-answer", "x")
         self.assertEqual(rc, 1)
         self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
+
+    def test_deck_name_with_slash_is_rejected(self):
+        rc = self.run_flashback("edit", "vocab/spanish", "-q", "hello?", "--new-answer", "x")
+        self.assertEqual(rc, 1)
 
 
 class TestReviewCommand(unittest.TestCase):
