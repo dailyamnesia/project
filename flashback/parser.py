@@ -24,6 +24,13 @@ CARD_SEPARATOR = re.compile(r"^-{3,}\s*$", re.MULTILINE)
 Q_PREFIX = re.compile(r"^Q:\s?", re.IGNORECASE)
 A_PREFIX = re.compile(r"^A:\s?", re.IGNORECASE)
 
+# Explicit bidirectional-formatting characters (Unicode's Bidi_Class values
+# for the embedding/override/isolate controls, not the full Cf category —
+# see _check_card_text for why the distinction matters).
+BIDI_FORMATTING_CLASSES = frozenset(
+    {"LRE", "RLE", "LRO", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI"}
+)
+
 
 @dataclass
 class Card:
@@ -101,6 +108,18 @@ def _check_card_text(question: str, answer: str) -> None:
     what's shown, which defeats the point of a flashcard. Newline and tab
     are legitimate content (multi-line answers already rely on newlines) and
     stay allowed; every other control character is rejected.
+
+    A related but distinct case: Unicode's explicit bidirectional-formatting
+    characters (RLO/LRO and friends — the "Trojan Source" family, the same
+    mechanism used to disguise malicious filenames as harmless ones) aren't
+    control characters at all, so the check above doesn't catch them, but
+    they can still reorder how the rest of the line displays — e.g. making
+    "evil<RLO>txt.exe" print as "evilexe.txt". Rejecting the whole Cf
+    ("format") category would also reject legitimate content — RTL marks,
+    Arabic letter marks, and the variation selectors/ZWJ sequences emoji
+    rely on are all Cf too — so this checks Unicode's narrower
+    Bidi_Class property instead, which isolates just the
+    embedding/override/isolate controls responsible for reordering.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -124,6 +143,12 @@ def _check_card_text(question: str, answer: str) -> None:
                     f"{field_name} contains a control character ({ch!r}), which can hide or "
                     "overwrite what's shown on screen when the card is displayed — not allowed "
                     "in card text"
+                )
+            if unicodedata.bidirectional(ch) in BIDI_FORMATTING_CLASSES:
+                raise ParseError(
+                    f"{field_name} contains a bidirectional-formatting character (U+"
+                    f"{ord(ch):04X}), which can reorder how surrounding text is displayed on "
+                    "screen — not allowed in card text"
                 )
 
 

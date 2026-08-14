@@ -133,6 +133,43 @@ class TestAppendCard(unittest.TestCase):
         text = append_card("", "question", "line one\n\tindented line two")
         self.assertEqual(parse_deck(text)[0].answer, "line one\n\tindented line two")
 
+    def test_answer_with_right_to_left_override_raises(self):
+        # RLO (U+202E) forces everything after it to display in reverse
+        # order until popped — the same mechanism used to disguise malicious
+        # filenames as harmless ones ("evil‮txt.exe" prints as
+        # "evilexe.txt"). Not a control character, so the Cc check above
+        # doesn't catch it.
+        with self.assertRaises(ParseError):
+            append_card("", "question", "evil‮txt.exe")
+
+    def test_question_with_left_to_right_override_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "before‭after", "answer")
+
+    def test_answer_with_other_bidi_formatting_characters_raises(self):
+        # embedding and isolate controls (not just the override pair) can
+        # also reorder surrounding text, so all nine explicit formatting
+        # codes are rejected, not just RLO/LRO.
+        for ch in ("‪", "‫", "‬", "⁦", "⁧", "⁨", "⁩"):
+            with self.assertRaises(ParseError):
+                append_card("", "question", f"answer with {ch} in it")
+
+    def test_right_to_left_text_without_formatting_controls_is_fine(self):
+        # ordinary RTL scripts (Hebrew, Arabic) are common, legitimate card
+        # content — only the explicit formatting *controls* are rejected,
+        # not text whose natural directionality is right-to-left.
+        text = append_card("", "מה זה?", "זה בסדר")
+        self.assertEqual(parse_deck(text)[0], Card(question="מה זה?", answer="זה בסדר"))
+
+    def test_emoji_sequence_with_zero_width_joiner_is_fine(self):
+        # ZWJ-joined emoji sequences (e.g. family/skin-tone emoji) and
+        # variation selectors are in the same Unicode "format" category as
+        # the bidi controls, but they don't reorder anything and are
+        # extremely common in ordinary text — must not be rejected.
+        family = "\U0001f468‍\U0001f469‍\U0001f467"
+        text = append_card("", "family emoji?", family)
+        self.assertEqual(parse_deck(text)[0].answer, family)
+
 
 class TestRemoveCard(unittest.TestCase):
     def test_removes_the_matching_card(self):
@@ -223,6 +260,11 @@ class TestEditCard(unittest.TestCase):
         text = "Q: 2+2?\nA: 4\n"
         with self.assertRaises(ParseError):
             edit_card(text, "2+2?", new_answer="four\x1b[8m (hidden)\x1b[0m")
+
+    def test_new_answer_with_bidi_override_raises(self):
+        text = "Q: 2+2?\nA: 4\n"
+        with self.assertRaises(ParseError):
+            edit_card(text, "2+2?", new_answer="evil‮txt.exe")
 
     def test_failure_leaves_text_semantics_unchanged(self):
         text = "Q: 2+2?\nA: 4\n"

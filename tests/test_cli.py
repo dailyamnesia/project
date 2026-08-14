@@ -82,6 +82,14 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse((self.decks_dir / "trivia.md").exists())
 
+    def test_answer_with_bidi_override_is_rejected_without_writing_file(self):
+        # RLO (U+202E) isn't a control character, but it reorders how
+        # everything after it displays — the same trick used to disguise
+        # malicious filenames as harmless ones.
+        rc = self.run_flashback("add", "trivia", "-q", "filename?", "-a", "evil‮txt.exe")
+        self.assertEqual(rc, 1)
+        self.assertFalse((self.decks_dir / "trivia.md").exists())
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):

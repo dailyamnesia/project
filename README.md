@@ -135,6 +135,14 @@ an embedded escape sequence could hide or overwrite what's actually
 shown instead of just displaying as text; `add`/`edit` reject it the same
 way as the structural-marker case above.
 
+Nor can it contain an explicit Unicode bidirectional-formatting character
+(RLO/LRO and the related embedding/isolate controls) — these can reorder
+how the rest of the line displays without changing the underlying text,
+the same trick used to disguise malicious filenames as harmless ones.
+Ordinary right-to-left text (Hebrew, Arabic, etc.) and emoji sequences are
+unaffected; only the small set of explicit formatting-control characters
+is rejected.
+
 ## How scheduling works
 
 Each card tracks three numbers: how many times in a row you've recalled it
