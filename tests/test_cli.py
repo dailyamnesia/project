@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from flashback.cli import main
 from flashback.parser import parse_deck
@@ -120,6 +121,35 @@ class TestEditCommand(unittest.TestCase):
         rc = self.run_flashback("edit", "spanish", "-q", "not there", "--new-answer", "x")
         self.assertEqual(rc, 1)
         self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
+
+
+class TestReviewCommand(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
+
+    def run_flashback(self, *args):
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
+
+    def test_eof_during_review_exits_cleanly_instead_of_crashing(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        with patch("builtins.input", side_effect=EOFError):
+            rc = self.run_flashback("review")
+        self.assertEqual(rc, 1)
+
+    def test_keyboard_interrupt_during_review_exits_cleanly_instead_of_crashing(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        with patch("builtins.input", side_effect=KeyboardInterrupt):
+            rc = self.run_flashback("review")
+        self.assertEqual(rc, 1)
 
 
 if __name__ == "__main__":

@@ -259,7 +259,14 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except EOFError:
+        print("\nerror: no more input.", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nerror: interrupted.", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
