@@ -83,6 +83,33 @@ class TestAppendCard(unittest.TestCase):
         with self.assertRaises(ParseError):
             append_card("", "question", "   ")
 
+    def test_answer_with_embedded_separator_line_raises(self):
+        # a line of 3+ dashes inside the answer would read back as a card
+        # separator and silently split this one card into two on the next
+        # sync — reject it here instead of writing a file that misparses.
+        with self.assertRaises(ParseError):
+            append_card("", "what's a markdown rule?", "like so:\n---\ndone")
+
+    def test_question_with_embedded_separator_line_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "explain this:\n---\nabove is dashes", "answer")
+
+    def test_answer_with_embedded_q_prefix_line_raises(self):
+        # a line starting with "Q:" inside the answer would read back as the
+        # start of a new question, silently merging/corrupting content.
+        with self.assertRaises(ParseError):
+            append_card("", "how do I format a card?", "start with:\nQ: your question")
+
+    def test_answer_with_embedded_a_prefix_line_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "how do I format a card?", "then:\nA: your answer")
+
+    def test_two_dash_line_is_fine(self):
+        # only 3+ dashes are read as a separator (see CARD_SEPARATOR) — a
+        # shorter line like "--" is ordinary content and shouldn't be flagged.
+        text = append_card("", "question", "see --\nthe notes")
+        self.assertEqual(parse_deck(text)[0].answer, "see --\nthe notes")
+
 
 class TestRemoveCard(unittest.TestCase):
     def test_removes_the_matching_card(self):
@@ -158,6 +185,16 @@ class TestEditCard(unittest.TestCase):
         text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n"
         with self.assertRaises(ParseError):
             edit_card(text, "a", new_question="b")
+
+    def test_new_answer_with_embedded_separator_line_raises(self):
+        text = "Q: 2+2?\nA: 4\n"
+        with self.assertRaises(ParseError):
+            edit_card(text, "2+2?", new_answer="see:\n---\ndone")
+
+    def test_new_question_with_embedded_q_prefix_line_raises(self):
+        text = "Q: 2+2?\nA: 4\n"
+        with self.assertRaises(ParseError):
+            edit_card(text, "2+2?", new_question="how do cards work?\nQ: like this")
 
     def test_failure_leaves_text_semantics_unchanged(self):
         text = "Q: 2+2?\nA: 4\n"

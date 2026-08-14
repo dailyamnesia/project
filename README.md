@@ -120,6 +120,14 @@ silently keeping only one of them. The same question text in *different*
 decks is fine and intentional: each deck is its own context, so those are
 treated as two independent cards with independent schedules.
 
+Since `Q:`, `A:`, and a line of three-or-more dashes are how the format
+finds card boundaries, a question or answer can't itself contain a line
+that looks like one of those markers — `add`/`edit` reject that up front,
+rather than writing a file that misparses (or silently corrupts) on the
+next `sync`. If you actually need to talk about dashes or the `Q:`/`A:`
+syntax in a card, break up the line (e.g. a leading space, or `Q :`)
+so it doesn't start the line on its own.
+
 ## How scheduling works
 
 Each card tracks three numbers: how many times in a row you've recalled it

@@ -56,6 +56,23 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_answer_with_embedded_separator_line_is_rejected_without_writing_file(self):
+        # Without this check, this would write successfully (a normal "added"
+        # message) but corrupt the file: the embedded "---" reads back as a
+        # card separator, splitting one card into two invalid ones, and the
+        # whole deck file then fails to parse on the next `sync`.
+        rc = self.run_flashback("add", "markdown", "-q", "what's a rule?", "-a", "like so:\n---\ndone")
+        self.assertEqual(rc, 1)
+        self.assertFalse((self.decks_dir / "markdown.md").exists())
+
+    def test_answer_with_embedded_q_prefix_line_is_rejected_without_writing_file(self):
+        # Without this check, this writes successfully with no error at all —
+        # the embedded "Q:" line reads back as a new question marker,
+        # silently merging the example text into the real question/answer.
+        rc = self.run_flashback("add", "syntax", "-q", "how do cards work?", "-a", "start with:\nQ: like this")
+        self.assertEqual(rc, 1)
+        self.assertFalse((self.decks_dir / "syntax.md").exists())
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):

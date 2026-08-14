@@ -82,6 +82,32 @@ def _parse_card(block: str) -> Card:
     return Card(question=question, answer=answer)
 
 
+def _check_card_text(question: str, answer: str) -> None:
+    """Raise ParseError if question/answer text would be misread as a structural marker.
+
+    A line of three-or-more dashes reads back as a card separator, splitting
+    one card into two (or more) on the next parse. A line starting with
+    `Q:`/`A:` reads back as a new section marker, silently merging/splitting
+    the card's actual content. Both write cleanly with no error at add-time
+    and only misbehave later, on the next sync — so catch them here, before
+    anything touches disk, same as the empty-question/answer checks above.
+    """
+    for field_name, text in (("question", question), ("answer", answer)):
+        for line in text.splitlines():
+            if CARD_SEPARATOR.fullmatch(line):
+                raise ParseError(
+                    f"{field_name} contains a line of three or more dashes ({line!r}), which "
+                    "flashback reads as a card separator — this would silently split the card "
+                    "in two on the next sync"
+                )
+            if Q_PREFIX.match(line) or A_PREFIX.match(line):
+                raise ParseError(
+                    f"{field_name} contains a line starting with 'Q:' or 'A:' ({line!r}), which "
+                    "flashback reads as the start of a new question/answer — this would "
+                    "silently corrupt the card's content on the next sync"
+                )
+
+
 def append_card(existing_text: str, question: str, answer: str) -> str:
     """Return deck file text with a new card appended.
 
@@ -95,6 +121,7 @@ def append_card(existing_text: str, question: str, answer: str) -> str:
         raise ParseError("question cannot be empty")
     if not answer:
         raise ParseError("answer cannot be empty")
+    _check_card_text(question, answer)
 
     card_text = f"Q: {question}\nA: {answer}\n"
     existing = existing_text.rstrip()
