@@ -9,7 +9,7 @@ from typing import Optional
 from . import __version__
 from .parser import ParseError, append_card, edit_card, parse_deck, remove_card
 from .scheduler import Grade
-from .storage import deck_stats, due_cards, open_db, record_review, sync_deck
+from .storage import deck_stats, due_cards, open_db, prune_missing_decks, record_review, sync_deck
 
 GRADE_KEYS = {
     "1": Grade.AGAIN,
@@ -49,8 +49,10 @@ def cmd_sync(args):
     today = date.today()
     with open_db(_db_path(args)) as conn:
         total_added = total_removed = 0
+        deck_names = set()
         for deck_file in sorted(decks_dir.glob("*.md")):
             deck_name = deck_file.stem
+            deck_names.add(deck_name)
             try:
                 cards = parse_deck(deck_file.read_text(encoding="utf-8"))
             except ParseError as exc:
@@ -60,6 +62,9 @@ def cmd_sync(args):
             total_added += added
             total_removed += removed
             print(f"{deck_name}: {len(cards)} cards ({added} new, {removed} removed)")
+        for deck_name, count in prune_missing_decks(conn, deck_names):
+            total_removed += count
+            print(f"{deck_name}: deck file no longer exists, removed {count} card(s)")
     print(f"synced. {total_added} new, {total_removed} removed total.")
     return 0
 

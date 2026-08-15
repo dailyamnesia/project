@@ -118,6 +118,28 @@ def record_review(conn, card_row, grade: Grade, today: date):
     return due
 
 
+def prune_missing_decks(conn, existing_deck_names):
+    """Delete every card whose deck isn't in `existing_deck_names`; return [(deck, count), ...].
+
+    `sync_deck` only reconciles cards *within* a deck it's handed a file for — if a
+    deck file is deleted outright, nothing ever calls `sync_deck` for it, so its
+    cards would otherwise sit in the database forever: still due, still counted in
+    `stats`, still shown by `review`, but unreachable from `remove`/`edit` since both
+    require the deck file to exist. This is the whole-deck counterpart to the
+    per-card removal `sync_deck` already does.
+    """
+    rows = conn.execute("SELECT DISTINCT deck FROM cards").fetchall()
+    pruned = []
+    for row in rows:
+        deck = row["deck"]
+        if deck in existing_deck_names:
+            continue
+        count = conn.execute("SELECT COUNT(*) FROM cards WHERE deck = ?", (deck,)).fetchone()[0]
+        conn.execute("DELETE FROM cards WHERE deck = ?", (deck,))
+        pruned.append((deck, count))
+    return pruned
+
+
 def deck_stats(conn, today: date):
     return conn.execute(
         """SELECT deck,

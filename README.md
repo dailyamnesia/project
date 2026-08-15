@@ -53,6 +53,9 @@ flashback stats      # see totals per deck
 `flashback sync` re-reads your deck files, so edit them freely — fix a
 typo, add a card, delete one — and re-run `sync` to pick up the changes.
 Existing cards keep their review history; only new questions start fresh.
+Deleting an entire deck file works the same way: the next `sync` notices
+it's gone and removes that deck's cards from the review database too,
+rather than leaving them stuck showing up as due forever.
 
 To add a card without hand-editing the file, use `flashback add`:
 

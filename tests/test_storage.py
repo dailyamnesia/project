@@ -5,7 +5,7 @@ from pathlib import Path
 
 from flashback.parser import parse_deck
 from flashback.scheduler import Grade
-from flashback.storage import due_cards, open_db, record_review, sync_deck
+from flashback.storage import due_cards, open_db, prune_missing_decks, record_review, sync_deck
 
 
 class TestStorage(unittest.TestCase):
@@ -55,6 +55,25 @@ class TestStorage(unittest.TestCase):
             self.assertEqual({r["deck"] for r in rows}, {"geography", "trivia"})
             self.assertEqual({r["id"] for r in rows}, {rows[0]["id"], rows[1]["id"]})
             self.assertNotEqual(rows[0]["id"], rows[1]["id"])
+
+    def test_prune_missing_decks_removes_cards_for_a_deck_no_longer_present(self):
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "geography", parse_deck("Q: capital?\nA: Paris\n"), today)
+            sync_deck(conn, "trivia", parse_deck("Q: capital?\nA: a large sum\n"), today)
+            pruned = prune_missing_decks(conn, {"geography"})
+            self.assertEqual(pruned, [("trivia", 1)])
+            rows = due_cards(conn, today)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["deck"], "geography")
+
+    def test_prune_missing_decks_leaves_present_decks_untouched(self):
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "d", parse_deck("Q: a\nA: 1\n"), today)
+            pruned = prune_missing_decks(conn, {"d"})
+            self.assertEqual(pruned, [])
+            self.assertEqual(len(due_cards(conn, today)), 1)
 
     def test_record_review_pushes_due_date_forward(self):
         today = date(2026, 1, 1)

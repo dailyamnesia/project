@@ -1,10 +1,12 @@
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
 from flashback.cli import main
 from flashback.parser import parse_deck
+from flashback.storage import due_cards, open_db
 
 
 class TestAddCommand(unittest.TestCase):
@@ -177,6 +179,61 @@ class TestEditCommand(unittest.TestCase):
     def test_deck_name_with_slash_is_rejected(self):
         rc = self.run_flashback("edit", "vocab/spanish", "-q", "hello?", "--new-answer", "x")
         self.assertEqual(rc, 1)
+
+
+class TestSyncCommand(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
+
+    def run_flashback(self, *args):
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
+
+    def test_deleting_a_deck_file_removes_its_cards_on_next_sync(self):
+        # Without prune_missing_decks, this deck's cards would sit in the database
+        # forever: sync only reconciles decks it's handed a file for, so a deck file
+        # deleted outright is never noticed. The cards would stay "due" and visible
+        # in stats, but unreachable from `remove`/`edit`, since both require the
+        # deck file to still exist.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        (self.decks_dir / "spanish.md").unlink()
+        rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+
+        rc = self.run_flashback("due")
+        self.assertEqual(rc, 0)
+
+    def test_deleted_deck_cards_are_gone_from_due_after_sync(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("add", "french", "-q", "bonjour?", "-a", "hello")
+        self.run_flashback("sync")
+
+        (self.decks_dir / "spanish.md").unlink()
+        self.run_flashback("sync")
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = due_cards(conn, date.today())
+        self.assertEqual({r["deck"] for r in rows}, {"french"})
+
+    def test_deck_file_that_fails_to_parse_does_not_lose_its_previously_synced_cards(self):
+        # A deck file that still exists but currently fails to parse (e.g. a typo
+        # mid-edit) is not the same as a deck that was deleted — sync should skip
+        # it with an error, not treat it as gone and prune its cards.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        (self.decks_dir / "spanish.md").write_text("not a valid card\n", encoding="utf-8")
+        self.run_flashback("sync")
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = due_cards(conn, date.today())
+        self.assertEqual(len(rows), 1)
 
 
 class TestReviewCommand(unittest.TestCase):
