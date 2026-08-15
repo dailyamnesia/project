@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from datetime import date
@@ -7,6 +8,10 @@ from unittest.mock import patch
 from flashback.cli import main
 from flashback.parser import parse_deck
 from flashback.storage import due_cards, open_db
+
+# Permission-based tests below don't mean anything as root, which ignores
+# file-mode write protection entirely.
+_RUNNING_AS_ROOT = hasattr(os, "getuid") and os.getuid() == 0
 
 
 class TestAddCommand(unittest.TestCase):
@@ -262,6 +267,56 @@ class TestReviewCommand(unittest.TestCase):
 
         with patch("builtins.input", side_effect=KeyboardInterrupt):
             rc = self.run_flashback("review")
+        self.assertEqual(rc, 1)
+
+
+@unittest.skipIf(_RUNNING_AS_ROOT, "root ignores file-mode write protection")
+class TestStateDirAccessErrors(unittest.TestCase):
+    """An unwritable --state-dir/--decks-dir is a real, user-triggerable
+    situation (permissions, a read-only mount, a path that collides with an
+    existing file) — it should exit cleanly with a one-line message, not a
+    raw traceback exposing internal file paths."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.decks_dir = Path(self._tmp.name) / "decks"
+        self.decks_dir.mkdir()
+        (self.decks_dir / "spanish.md").write_text("Q: hola?\nA: hello\n", encoding="utf-8")
+        self.state_dir = Path(self._tmp.name) / ".flashback"
+
+    def run_flashback(self, *args):
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
+
+    def test_readonly_state_dir_exits_cleanly_on_sync(self):
+        self.state_dir.mkdir()
+        self.state_dir.chmod(0o555)
+        self.addCleanup(self.state_dir.chmod, 0o755)
+
+        rc = self.run_flashback("sync")
+        self.assertEqual(rc, 1)
+
+    def test_readonly_state_dir_exits_cleanly_on_stats(self):
+        self.state_dir.mkdir()
+        self.state_dir.chmod(0o555)
+        self.addCleanup(self.state_dir.chmod, 0o755)
+
+        rc = self.run_flashback("stats")
+        self.assertEqual(rc, 1)
+
+    def test_state_dir_path_colliding_with_existing_file_exits_cleanly(self):
+        self.state_dir.write_text("not a directory", encoding="utf-8")
+
+        rc = self.run_flashback("sync")
+        self.assertEqual(rc, 1)
+
+    def test_readonly_decks_dir_exits_cleanly_on_add(self):
+        self.decks_dir.chmod(0o555)
+        self.addCleanup(self.decks_dir.chmod, 0o755)
+
+        rc = self.run_flashback("add", "newdeck", "-q", "q?", "-a", "a")
         self.assertEqual(rc, 1)
 
 

@@ -1,6 +1,7 @@
 """Command-line interface for flashback."""
 
 import argparse
+import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
@@ -300,6 +301,19 @@ def main(argv=None):
         return 1
     except KeyboardInterrupt:
         print("\nerror: interrupted.", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # decks-dir and state-dir are both user-supplied and can point
+        # somewhere unwritable (permissions, a file where a directory's
+        # expected, a read-only mount) — without this, that surfaces as a
+        # raw traceback instead of a one-line error. exc's own text already
+        # names the offending path.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except sqlite3.Error as exc:
+        # Unlike OSError, sqlite3's own message doesn't include the path
+        # (e.g. "unable to open database file"), so name it ourselves.
+        print(f"error: couldn't open the review database in {args.state_dir!r}: {exc}", file=sys.stderr)
         return 1
 
 
