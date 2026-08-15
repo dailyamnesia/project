@@ -168,6 +168,21 @@ class TestEditCommand(unittest.TestCase):
         cards = parse_deck(deck_path.read_text(encoding="utf-8"))
         self.assertEqual(cards[0].question, "hi?")
 
+    def test_matches_question_with_surrounding_whitespace(self):
+        # `remove` and `edit_card()` both strip -q before matching (parsed
+        # questions are already stripped by the parser); cmd_edit's own
+        # pre-lookup compared the raw, unstripped arg and silently missed a
+        # real card whenever -q carried leading/trailing whitespace, even
+        # though the identical `remove -q "  hello?  "` succeeded.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+
+        rc = self.run_flashback("edit", "spanish", "-q", "  hello?  ", "--new-answer", "hola!")
+        self.assertEqual(rc, 0)
+
+        deck_path = self.decks_dir / "spanish.md"
+        cards = parse_deck(deck_path.read_text(encoding="utf-8"))
+        self.assertEqual(cards[0].answer, "hola!")
+
     def test_missing_deck_file_fails(self):
         rc = self.run_flashback("edit", "no-such-deck", "-q", "hello?", "--new-answer", "x")
         self.assertEqual(rc, 1)

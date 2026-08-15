@@ -136,7 +136,7 @@ def cmd_edit(args):
         print(f"no such deck: {deck_path}", file=sys.stderr)
         return 1
 
-    question = args.question if args.question is not None else input("Q: ")
+    question = (args.question if args.question is not None else input("Q: ")).strip()
 
     existing_text = deck_path.read_text(encoding="utf-8")
     try:
