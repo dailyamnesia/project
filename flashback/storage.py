@@ -64,12 +64,17 @@ def sync_deck(conn, deck: str, cards, today: date):
     for card in cards:
         cid = card_id(deck, card.question)
         seen_ids.add(cid)
-        row = conn.execute("SELECT id FROM cards WHERE id = ?", (cid,)).fetchone()
-        if row is None:
-            conn.execute(
-                "INSERT INTO cards (id, deck, question, answer, due_date) VALUES (?, ?, ?, ?, ?)",
-                (cid, deck, card.question, card.answer, today.isoformat()),
-            )
+        # INSERT OR IGNORE + rowcount, not a SELECT-then-INSERT: the latter is
+        # a check-then-act race across processes (two concurrent `sync` runs
+        # can both see "not found" and both try to INSERT the same new card),
+        # which surfaced as a raw UNIQUE constraint crash under real concurrent
+        # use. Losing this race just means the row already exists by the time
+        # our statement runs, same as the pre-existing-card case below.
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO cards (id, deck, question, answer, due_date) VALUES (?, ?, ?, ?, ?)",
+            (cid, deck, card.question, card.answer, today.isoformat()),
+        )
+        if cursor.rowcount:
             added += 1
         else:
             conn.execute("UPDATE cards SET answer = ? WHERE id = ?", (card.answer, cid))

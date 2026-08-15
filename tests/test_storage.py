@@ -1,11 +1,13 @@
+import sqlite3
 import tempfile
+import threading
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
 from flashback.parser import parse_deck
 from flashback.scheduler import Grade
-from flashback.storage import due_cards, open_db, prune_missing_decks, record_review, sync_deck
+from flashback.storage import SCHEMA, due_cards, open_db, prune_missing_decks, record_review, sync_deck
 
 
 class TestStorage(unittest.TestCase):
@@ -74,6 +76,50 @@ class TestStorage(unittest.TestCase):
             pruned = prune_missing_decks(conn, {"d"})
             self.assertEqual(pruned, [])
             self.assertEqual(len(due_cards(conn, today)), 1)
+
+    def test_concurrent_sync_of_the_same_new_cards_does_not_crash(self):
+        """Regression test for a real race, found by running `sync` from
+        several terminals against the same state file at once: two
+        connections can both see a brand-new card as absent and both try
+        to add it. The old SELECT-then-INSERT wasn't atomic across
+        connections, so the second writer crashed with
+        sqlite3.IntegrityError once the first had committed. sync_deck now
+        uses INSERT OR IGNORE, so the loser of the race falls through to
+        the update path instead of raising.
+
+        Needs many decks and many threads together to reliably land two
+        writers on the same card's INSERT at once — a single card and a
+        handful of threads passed even against the old, buggy code."""
+        today = date(2026, 1, 1)
+        decks = {f"deck{i}": parse_deck(f"Q: q{i}?\nA: a{i}\n") for i in range(30)}
+        errors = []
+        barrier = threading.Barrier(15)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(SCHEMA)
+
+        def worker():
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                barrier.wait()
+                for name, cards in decks.items():
+                    sync_deck(conn, name, cards, today)
+                conn.commit()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                conn.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(15)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        with open_db(self.db_path) as conn:
+            self.assertEqual(len(due_cards(conn, today)), len(decks))
 
     def test_record_review_pushes_due_date_forward(self):
         today = date(2026, 1, 1)
