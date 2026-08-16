@@ -231,6 +231,14 @@ def cmd_review(args):
                     print("  please enter again, hard, good, easy, or q")
 
             due = record_review(conn, row, grade, today)
+            # Commit each card immediately rather than relying on open_db's
+            # single end-of-session commit: an interruption (EOFError from a
+            # dropped stdin, KeyboardInterrupt, a closed terminal) partway
+            # through a review skips that final commit entirely, which would
+            # otherwise silently roll back every card graded earlier in the
+            # same session too — even ones that already printed "next
+            # review: ..." as if they were saved.
+            conn.commit()
             print(f"  next review: {due.isoformat()}\n")
             reviewed += 1
 

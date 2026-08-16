@@ -284,6 +284,37 @@ class TestReviewCommand(unittest.TestCase):
             rc = self.run_flashback("review")
         self.assertEqual(rc, 1)
 
+    def test_interruption_mid_session_still_saves_cards_already_graded(self):
+        # Three cards due; grade the first two normally, then EOF (a dropped
+        # stdin/terminal, same shape as a real Ctrl-D) hits on the third
+        # card's reveal prompt. The two already-graded cards each printed a
+        # "next review: ..." confirmation before the interruption — that
+        # confirmation must be real, not silently rolled back along with the
+        # incomplete third card.
+        self.run_flashback("add", "spanish", "-q", "one?", "-a", "uno")
+        self.run_flashback("add", "spanish", "-q", "two?", "-a", "dos")
+        self.run_flashback("add", "spanish", "-q", "three?", "-a", "tres")
+        self.run_flashback("sync")
+
+        with patch(
+            "builtins.input",
+            side_effect=["", "3", "", "3", EOFError],
+        ):
+            rc = self.run_flashback("review")
+        self.assertEqual(rc, 1)
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = {
+                row["question"]: row
+                for row in conn.execute("SELECT question, repetitions, due_date FROM cards")
+            }
+        self.assertEqual(rows["one?"]["repetitions"], 1)
+        self.assertEqual(rows["two?"]["repetitions"], 1)
+        self.assertNotEqual(rows["one?"]["due_date"], date.today().isoformat())
+        self.assertNotEqual(rows["two?"]["due_date"], date.today().isoformat())
+        # the interrupted third card was never graded, so it's untouched
+        self.assertEqual(rows["three?"]["repetitions"], 0)
+
 
 @unittest.skipIf(_RUNNING_AS_ROOT, "root ignores file-mode write protection")
 class TestStateDirAccessErrors(unittest.TestCase):
