@@ -98,6 +98,34 @@ class TestAppendCard(unittest.TestCase):
         with self.assertRaises(ParseError):
             append_card("", "question", "   ")
 
+    def test_duplicate_question_in_same_deck_raises(self):
+        # Without this check, `add`-ing the same question twice silently
+        # succeeds both times and writes a deck file that `parse_deck`
+        # (validate=True, what `sync` calls) then refuses to read at all —
+        # bricking the whole deck through the CLI with no error at the
+        # moment that actually caused it.
+        existing = append_card("", "capital of France?", "Paris")
+        with self.assertRaises(ParseError):
+            append_card(existing, "capital of France?", "a different answer")
+
+    def test_duplicate_question_check_ignores_surrounding_whitespace(self):
+        existing = append_card("", "capital of France?", "Paris")
+        with self.assertRaises(ParseError):
+            append_card(existing, "  capital of France?  ", "a different answer")
+
+    def test_duplicate_question_check_does_not_block_an_unrelated_add(self):
+        existing = append_card("", "capital of France?", "Paris")
+        text = append_card(existing, "capital of Spain?", "Madrid")
+        self.assertEqual(len(parse_deck(text)), 2)
+
+    def test_duplicate_question_check_is_not_blocked_by_other_poisoned_card(self):
+        # append_card parses existing_text with validate=False, same reasoning
+        # as remove_card/edit_card: an unrelated card already on disk that
+        # fails _check_card_text shouldn't block adding a new, distinct card.
+        existing = "Q: question\nA: answer with a bell\x07 in it\n"
+        text = append_card(existing, "a new question", "a new answer")
+        self.assertEqual(len(parse_deck(text, validate=False)), 2)
+
     def test_answer_with_embedded_separator_line_raises(self):
         # a line of 3+ dashes inside the answer would read back as a card
         # separator and silently split this one card into two on the next

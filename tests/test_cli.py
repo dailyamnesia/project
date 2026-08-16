@@ -97,6 +97,22 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse((self.decks_dir / "trivia.md").exists())
 
+    def test_adding_the_same_question_twice_is_rejected_without_touching_the_file(self):
+        # Without this check, this silently succeeds both times (a normal
+        # "added" message, no error) and writes a deck file that `sync`
+        # then refuses to load at all, since parse_deck's duplicate check
+        # runs on every real read — the whole deck goes dark with no error
+        # at the moment that actually caused it.
+        rc1 = self.run_flashback("add", "trivia", "-q", "capital of France?", "-a", "Paris")
+        self.assertEqual(rc1, 0)
+        deck_path = self.decks_dir / "trivia.md"
+        before = deck_path.read_text(encoding="utf-8")
+
+        rc2 = self.run_flashback("add", "trivia", "-q", "capital of France?", "-a", "a different answer")
+        self.assertEqual(rc2, 1)
+        self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
+        self.assertEqual(len(parse_deck(before)), 1)
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):

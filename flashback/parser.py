@@ -47,12 +47,12 @@ def parse_deck(text: str, *, validate: bool = True) -> list[Card]:
 
     `validate=False` skips `_check_card_text` on every card (duplicate-question
     detection still runs either way — that's a structural correctness check, not
-    a dangerous-content one). Used internally by `remove_card`/`edit_card`, which
-    only need to *locate* a card by question text among the others, not re-vet
+    a dangerous-content one). Used internally by `append_card`/`remove_card`/
+    `edit_card`, which only need to *locate* card(s) among the others, not re-vet
     every unrelated card's content on each call — otherwise one poisoned card
-    (see the docstring on `_check_card_text`) would block removing or editing any
-    other, unrelated card in the same deck. `sync` and any other real read of a
-    deck file's content should keep the default `validate=True`.
+    (see the docstring on `_check_card_text`) would block adding, removing, or
+    editing any other, unrelated card in the same deck. `sync` and any other real
+    read of a deck file's content should keep the default `validate=True`.
     """
     cards = []
     seen_questions = set()
@@ -207,7 +207,15 @@ def append_card(existing_text: str, question: str, answer: str) -> str:
 
     Adds a `---` separator before the new card if the file already has
     content, so this can be used both to create a deck file from scratch
-    and to add a card to an existing one.
+    and to add a card to an existing one. Raises ParseError if a card with
+    the same question already exists in this deck — without this check,
+    `add` would silently create a duplicate that then blocks `sync` for
+    the whole deck (parse_deck's own duplicate check, further down this
+    file, runs unconditionally on every read).
+
+    Parses `existing_text` with `validate=False`: adding a new card
+    shouldn't be blocked by some other, unrelated card in the same deck
+    failing `_check_card_text` — same reasoning as `remove_card`/`edit_card`.
     """
     question = question.strip()
     answer = answer.strip()
@@ -216,6 +224,12 @@ def append_card(existing_text: str, question: str, answer: str) -> str:
     if not answer:
         raise ParseError("answer cannot be empty")
     _check_card_text(question, answer)
+
+    existing_cards = parse_deck(existing_text, validate=False)
+    if any(card.question == question for card in existing_cards):
+        raise ParseError(
+            f"a card with this question already exists in this deck: {question!r}"
+        )
 
     return _append_block(existing_text, _format_card(question, answer))
 
