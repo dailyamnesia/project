@@ -307,6 +307,38 @@ class TestSyncCommand(unittest.TestCase):
             rows = due_cards(conn, date.today())
         self.assertEqual(len(rows), 1)
 
+    def test_non_utf8_deck_file_is_skipped_not_a_crash(self):
+        # A deck file isn't guaranteed to be valid UTF-8 (hand-edited, pasted
+        # from somewhere with different encoding, etc.) — this used to crash
+        # the whole sync with a raw UnicodeDecodeError traceback, and take
+        # every other, unrelated deck's sync down with it, instead of just
+        # skipping the one broken file the same way a ParseError already is.
+        self.run_flashback("add", "french", "-q", "bonjour?", "-a", "hello")
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "badenc.md").write_bytes(b"Q: caf\xe9?\nA: coffee\n")
+
+        rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = due_cards(conn, date.today())
+        self.assertEqual({r["question"] for r in rows}, {"bonjour?"})
+
+    def test_directory_matching_deck_glob_is_skipped_not_a_crash(self):
+        # decks_dir.glob("*.md") matches directories too, not just files —
+        # a directory that happens to end in .md used to crash the whole
+        # sync (an uncaught IsADirectoryError) instead of skipping just that
+        # one bogus entry.
+        self.run_flashback("add", "french", "-q", "bonjour?", "-a", "hello")
+        (self.decks_dir / "oddname.md").mkdir(parents=True)
+
+        rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = due_cards(conn, date.today())
+        self.assertEqual({r["question"] for r in rows}, {"bonjour?"})
+
 
 class TestReviewCommand(unittest.TestCase):
     def setUp(self):

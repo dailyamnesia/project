@@ -56,7 +56,14 @@ def cmd_sync(args):
             deck_names.add(deck_name)
             try:
                 cards = parse_deck(deck_file.read_text(encoding="utf-8"))
-            except ParseError as exc:
+            except (ParseError, UnicodeDecodeError, OSError) as exc:
+                # A deck file that isn't valid UTF-8, or isn't even a regular
+                # file (e.g. a directory happens to match *.md), is the same
+                # kind of "skip this one deck, don't lose the rest" situation
+                # as a ParseError — without catching these too, either one
+                # crashed the whole sync with a raw traceback, taking every
+                # other deck's changes down with it instead of just the one
+                # deck that's actually broken.
                 print(f"skipping {deck_file}: {exc}", file=sys.stderr)
                 continue
             added, removed = sync_deck(conn, deck_name, cards, today)
