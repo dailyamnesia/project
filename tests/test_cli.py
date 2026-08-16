@@ -136,6 +136,24 @@ class TestRemoveCommand(unittest.TestCase):
         rc = self.run_flashback("remove", "vocab/spanish", "-q", "hello?")
         self.assertEqual(rc, 1)
 
+    def test_removes_unrelated_card_despite_a_poisoned_card_hand_edited_into_the_deck(self):
+        # A control character typed straight into the deck file (bypassing
+        # add/edit's own checks entirely) used to block remove of any other,
+        # unrelated card in that deck too, since parser.remove_card re-vetted
+        # every card in the file, not just the one being removed.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        deck_path = self.decks_dir / "spanish.md"
+        deck_path.write_text(
+            deck_path.read_text(encoding="utf-8") + "\n---\n\nQ: bad\nA: bell\x07here\n",
+            encoding="utf-8",
+        )
+
+        rc = self.run_flashback("remove", "spanish", "-q", "hello?")
+        self.assertEqual(rc, 0)
+
+        cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
+        self.assertEqual([c.question for c in cards], ["bad"])
+
 
 class TestEditCommand(unittest.TestCase):
     def setUp(self):
@@ -199,6 +217,24 @@ class TestEditCommand(unittest.TestCase):
     def test_deck_name_with_slash_is_rejected(self):
         rc = self.run_flashback("edit", "vocab/spanish", "-q", "hello?", "--new-answer", "x")
         self.assertEqual(rc, 1)
+
+    def test_edits_unrelated_card_despite_a_poisoned_card_hand_edited_into_the_deck(self):
+        # Same reasoning as remove's equivalent test — and cmd_edit has its
+        # own separate pre-lookup (to print the current Q/A before prompting)
+        # that used to call parse_deck with full validation too, so this
+        # exercises a second, CLI-level fix point, not just parser.edit_card.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        deck_path = self.decks_dir / "spanish.md"
+        deck_path.write_text(
+            deck_path.read_text(encoding="utf-8") + "\n---\n\nQ: bad\nA: bell\x07here\n",
+            encoding="utf-8",
+        )
+
+        rc = self.run_flashback("edit", "spanish", "-q", "hello?", "--new-answer", "hola!")
+        self.assertEqual(rc, 0)
+
+        cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
+        self.assertEqual(cards[0].answer, "hola!")
 
 
 class TestSyncCommand(unittest.TestCase):

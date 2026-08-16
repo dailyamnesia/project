@@ -42,7 +42,18 @@ class ParseError(ValueError):
     pass
 
 
-def parse_deck(text: str) -> list[Card]:
+def parse_deck(text: str, *, validate: bool = True) -> list[Card]:
+    """Parse deck file text into cards.
+
+    `validate=False` skips `_check_card_text` on every card (duplicate-question
+    detection still runs either way — that's a structural correctness check, not
+    a dangerous-content one). Used internally by `remove_card`/`edit_card`, which
+    only need to *locate* a card by question text among the others, not re-vet
+    every unrelated card's content on each call — otherwise one poisoned card
+    (see the docstring on `_check_card_text`) would block removing or editing any
+    other, unrelated card in the same deck. `sync` and any other real read of a
+    deck file's content should keep the default `validate=True`.
+    """
     cards = []
     seen_questions = set()
     for block in CARD_SEPARATOR.split(text):
@@ -57,18 +68,19 @@ def parse_deck(text: str) -> list[Card]:
                 "review history is keyed on deck + question"
             )
         seen_questions.add(card.question)
-        # Deck files are meant to be hand-edited directly, not only written
-        # through `add`/`edit` — so this check has to run here too, not just
-        # in append_card. Without it, a control character or bidi-override
-        # typed straight into a deck file sails through `sync` untouched and
-        # only surfaces later, raw, when `review` prints it to the terminal:
-        # exactly the scenario this check exists to prevent, just reached by
-        # a different door. (The dash-separator and Q:/A:-prefix checks in
-        # _check_card_text are effectively no-ops here, since a real
-        # occurrence of either would already have split or reread the block
-        # differently above — only the character-level checks can still fire
-        # on text that's already been parsed.)
-        _check_card_text(card.question, card.answer)
+        if validate:
+            # Deck files are meant to be hand-edited directly, not only written
+            # through `add`/`edit` — so this check has to run here too, not just
+            # in append_card. Without it, a control character or bidi-override
+            # typed straight into a deck file sails through `sync` untouched and
+            # only surfaces later, raw, when `review` prints it to the terminal:
+            # exactly the scenario this check exists to prevent, just reached by
+            # a different door. (The dash-separator and Q:/A:-prefix checks in
+            # _check_card_text are effectively no-ops here, since a real
+            # occurrence of either would already have split or reread the block
+            # differently above — only the character-level checks can still fire
+            # on text that's already been parsed.)
+            _check_card_text(card.question, card.answer)
         cards.append(card)
     return cards
 
@@ -164,6 +176,32 @@ def _check_card_text(question: str, answer: str) -> None:
                 )
 
 
+def _format_card(question: str, answer: str) -> str:
+    return f"Q: {question}\nA: {answer}\n"
+
+
+def _append_block(existing_text: str, card_text: str) -> str:
+    existing = existing_text.rstrip()
+    if not existing:
+        return card_text
+    return f"{existing}\n\n---\n\n{card_text}"
+
+
+def _render_deck(cards: list[Card]) -> str:
+    """Render cards back to deck file text without re-validating their content.
+
+    Used by `remove_card`/`edit_card` to rebuild a deck's text after locating
+    a target card — the cards being carried over unchanged already round-tripped
+    through the file once, so re-checking them here would only serve to block
+    the operation on some other, unrelated poisoned card (see `parse_deck`'s
+    `validate` parameter).
+    """
+    text = ""
+    for card in cards:
+        text = _append_block(text, _format_card(card.question, card.answer))
+    return text
+
+
 def append_card(existing_text: str, question: str, answer: str) -> str:
     """Return deck file text with a new card appended.
 
@@ -179,11 +217,7 @@ def append_card(existing_text: str, question: str, answer: str) -> str:
         raise ParseError("answer cannot be empty")
     _check_card_text(question, answer)
 
-    card_text = f"Q: {question}\nA: {answer}\n"
-    existing = existing_text.rstrip()
-    if not existing:
-        return card_text
-    return f"{existing}\n\n---\n\n{card_text}"
+    return _append_block(existing_text, _format_card(question, answer))
 
 
 def remove_card(existing_text: str, question: str) -> str:
@@ -193,17 +227,17 @@ def remove_card(existing_text: str, question: str) -> str:
     normalizes on. Raises ParseError if no card matches — the caller (or a
     person hand-editing the file) got the question text wrong, and silently
     doing nothing would be worse than saying so.
+
+    Parses with `validate=False`: removing one card shouldn't be blocked by
+    some other, unrelated card in the same deck failing `_check_card_text`.
     """
     question = question.strip()
-    cards = parse_deck(existing_text)
+    cards = parse_deck(existing_text, validate=False)
     remaining = [card for card in cards if card.question != question]
     if len(remaining) == len(cards):
         raise ParseError(f"no card with that question found: {question!r}")
 
-    text = ""
-    for card in remaining:
-        text = append_card(text, card.question, card.answer)
-    return text
+    return _render_deck(remaining)
 
 
 def edit_card(
@@ -221,12 +255,17 @@ def edit_card(
     is keyed on, so (like remove + add) it resets that card's review
     history on the next sync. Changing only the answer does not — the
     card's id is unaffected, so its schedule carries over.
+
+    Parses with `validate=False` and instead runs `_check_card_text` only on
+    the new question/answer text being written: editing one card shouldn't be
+    blocked by some other, unrelated card in the same deck failing that check,
+    but the new content this call actually introduces still has to pass it.
     """
     if new_question is None and new_answer is None:
         raise ParseError("must provide a new question and/or a new answer to edit")
 
     question = question.strip()
-    cards = parse_deck(existing_text)
+    cards = parse_deck(existing_text, validate=False)
 
     updated = []
     found = False
@@ -239,6 +278,7 @@ def edit_card(
                 raise ParseError("question cannot be empty")
             if not a:
                 raise ParseError("answer cannot be empty")
+            _check_card_text(q, a)
             updated.append(Card(question=q, answer=a))
         else:
             updated.append(card)
@@ -254,7 +294,4 @@ def edit_card(
             )
         seen.add(card.question)
 
-    text = ""
-    for card in updated:
-        text = append_card(text, card.question, card.answer)
-    return text
+    return _render_deck(updated)

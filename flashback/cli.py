@@ -140,7 +140,12 @@ def cmd_edit(args):
 
     existing_text = deck_path.read_text(encoding="utf-8")
     try:
-        match = next((c for c in parse_deck(existing_text) if c.question == question), None)
+        # validate=False: this is just a lookup to show the card's current
+        # text before prompting — it shouldn't be blocked by some other,
+        # unrelated card in the same deck failing _check_card_text.
+        # edit_card() below still validates whatever new text is actually
+        # written.
+        match = next((c for c in parse_deck(existing_text, validate=False) if c.question == question), None)
     except ParseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -221,6 +221,16 @@ class TestRemoveCard(unittest.TestCase):
         # before any card is dropped, not partway through.
         self.assertEqual(parse_deck(text), [Card(question="2+2?", answer="4")])
 
+    def test_removes_unrelated_card_despite_another_poisoned_card_in_the_deck(self):
+        # A control character elsewhere in the deck (e.g. typed straight into
+        # the file, bypassing append_card's checks — see parse_deck's own
+        # control-character test) would previously block removing any other,
+        # unrelated card too, since remove_card used to call parse_deck with
+        # its default full validation.
+        text = "Q: a\nA: 1\n---\nQ: bad\nA: bell\x07here\n"
+        result = remove_card(text, "a")
+        self.assertEqual(parse_deck(result, validate=False), [Card(question="bad", answer="bell\x07here")])
+
 
 class TestEditCard(unittest.TestCase):
     def test_edits_answer_only_and_keeps_position(self):
@@ -286,6 +296,23 @@ class TestEditCard(unittest.TestCase):
         with self.assertRaises(ParseError):
             edit_card(text, "nope", new_answer="x")
         self.assertEqual(parse_deck(text), [Card(question="2+2?", answer="4")])
+
+    def test_edits_unrelated_card_despite_another_poisoned_card_in_the_deck(self):
+        # Same reasoning as remove_card's equivalent test: one poisoned card
+        # elsewhere in the deck shouldn't block editing a different, unrelated
+        # card.
+        text = "Q: a\nA: 1\n---\nQ: bad\nA: bell\x07here\n"
+        result = edit_card(text, "a", new_answer="one")
+        cards = parse_deck(result, validate=False)
+        self.assertEqual(cards[0], Card(question="a", answer="one"))
+        self.assertEqual(cards[1], Card(question="bad", answer="bell\x07here"))
+
+    def test_new_content_is_still_validated_despite_a_poisoned_card_elsewhere(self):
+        # The validate=False parse used to locate the target card must not
+        # weaken validation of the *new* text this call actually writes.
+        text = "Q: a\nA: 1\n---\nQ: bad\nA: bell\x07here\n"
+        with self.assertRaises(ParseError):
+            edit_card(text, "a", new_answer="four\x1b[8m (hidden)\x1b[0m")
 
 
 if __name__ == "__main__":
