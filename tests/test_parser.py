@@ -52,8 +52,23 @@ class TestParser(unittest.TestCase):
         cards_b = parse_deck("Q: hola\nA: hi\n")
         self.assertEqual(cards_a, cards_b)
 
+    def test_control_character_typed_directly_into_a_deck_file_raises(self):
+        # Deck files are meant to be hand-edited, not only written through
+        # `add`/`edit` — append_card's checks don't run for text that
+        # reaches parse_deck this way, so parse_deck has to check for itself.
+        # Without this, a control character typed straight into the file
+        # would sync cleanly and only surface later, raw, when `review`
+        # prints it to the terminal.
+        with self.assertRaises(ParseError):
+            parse_deck("Q: question\nA: answer with a bell\x07 in it\n")
+
+    def test_bidi_override_typed_directly_into_a_deck_file_raises(self):
+        with self.assertRaises(ParseError):
+            parse_deck("Q: question\nA: evil‮txt.exe\n")
+
 
 class TestAppendCard(unittest.TestCase):
+
     def test_appends_to_empty_text_with_no_separator(self):
         text = append_card("", "capital of France?", "Paris")
         self.assertEqual(text, "Q: capital of France?\nA: Paris\n")

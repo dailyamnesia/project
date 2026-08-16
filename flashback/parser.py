@@ -57,6 +57,18 @@ def parse_deck(text: str) -> list[Card]:
                 "review history is keyed on deck + question"
             )
         seen_questions.add(card.question)
+        # Deck files are meant to be hand-edited directly, not only written
+        # through `add`/`edit` — so this check has to run here too, not just
+        # in append_card. Without it, a control character or bidi-override
+        # typed straight into a deck file sails through `sync` untouched and
+        # only surfaces later, raw, when `review` prints it to the terminal:
+        # exactly the scenario this check exists to prevent, just reached by
+        # a different door. (The dash-separator and Q:/A:-prefix checks in
+        # _check_card_text are effectively no-ops here, since a real
+        # occurrence of either would already have split or reread the block
+        # differently above — only the character-level checks can still fire
+        # on text that's already been parsed.)
+        _check_card_text(card.question, card.answer)
         cards.append(card)
     return cards
 
