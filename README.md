@@ -182,6 +182,13 @@ original. If the write is interrupted partway (disk full, the process
 killed), the deck file is left exactly as it was; you never end up with a
 half-written or empty deck file.
 
+`sync` commits each deck's changes to the review database as soon as
+that deck is processed, not once at the very end. If `sync` is
+interrupted partway through a run with many decks (Ctrl-C, a closed
+terminal), every deck already reported as synced is genuinely saved —
+only the deck in progress at the moment of interruption is left for the
+next `sync` to pick up.
+
 ## Development
 
 ```bash

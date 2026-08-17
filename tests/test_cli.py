@@ -8,6 +8,7 @@ from unittest.mock import patch
 from flashback.cli import main
 from flashback.parser import parse_deck
 from flashback.storage import due_cards, open_db
+from flashback.storage import sync_deck as real_sync_deck
 
 # Permission-based tests below don't mean anything as root, which ignores
 # file-mode write protection entirely.
@@ -384,6 +385,37 @@ class TestSyncCommand(unittest.TestCase):
         with open_db(self.state_dir / "state.sqlite3") as conn:
             rows = due_cards(conn, date.today())
         self.assertEqual({r["question"] for r in rows}, {"bonjour?"})
+
+    def test_interruption_mid_sync_still_saves_decks_already_processed(self):
+        # Two decks to sync; the first succeeds and prints its "N new, M
+        # removed" confirmation, then the second raises mid-sync (a real
+        # KeyboardInterrupt, or any other crash reaching this point, has the
+        # same shape). That confirmation for the first deck must be real,
+        # not silently rolled back along with the interrupted second deck —
+        # the same failure mode session 43 fixed for `review`.
+        self.run_flashback("add", "alpha", "-q", "one?", "-a", "uno")
+        self.run_flashback("add", "beta", "-q", "two?", "-a", "dos")
+
+        calls = []
+
+        def flaky_sync_deck(conn, deck, cards, today):
+            calls.append(deck)
+            if len(calls) == 2:
+                raise KeyboardInterrupt("simulated interruption on second deck")
+            return real_sync_deck(conn, deck, cards, today)
+
+        with patch("flashback.cli.sync_deck", side_effect=flaky_sync_deck):
+            # main() catches KeyboardInterrupt itself and exits cleanly with
+            # code 1 rather than propagating it — same as a real Ctrl-C.
+            rc = self.run_flashback("sync")
+        self.assertEqual(rc, 1)
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = {row["deck"] for row in conn.execute("SELECT deck FROM cards")}
+        # alpha was synced and its confirmation printed before beta's
+        # interruption — it must actually be in the database, not rolled
+        # back just because a later deck in the same run failed.
+        self.assertIn("alpha", rows)
 
     def test_directory_matching_deck_glob_is_skipped_not_a_crash(self):
         # decks_dir.glob("*.md") matches directories too, not just files —

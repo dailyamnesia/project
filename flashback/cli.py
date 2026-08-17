@@ -89,10 +89,19 @@ def cmd_sync(args):
                 print(f"skipping {deck_file}: {exc}", file=sys.stderr)
                 continue
             added, removed = sync_deck(conn, deck_name, cards, today)
+            # Commit each deck immediately rather than relying on open_db's
+            # single end-of-session commit: an interruption partway through a
+            # multi-deck sync (KeyboardInterrupt, a crash on a later deck)
+            # skipped that final commit entirely, silently rolling back every
+            # deck synced earlier in the same run too — even ones that had
+            # already printed "N new, M removed" as if it were saved.
+            conn.commit()
             total_added += added
             total_removed += removed
             print(f"{deck_name}: {len(cards)} cards ({added} new, {removed} removed)")
-        for deck_name, count in prune_missing_decks(conn, deck_names):
+        pruned = prune_missing_decks(conn, deck_names)
+        conn.commit()
+        for deck_name, count in pruned:
             total_removed += count
             print(f"{deck_name}: deck file no longer exists, removed {count} card(s)")
     print(f"synced. {total_added} new, {total_removed} removed total.")
