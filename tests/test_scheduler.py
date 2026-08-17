@@ -1,6 +1,7 @@
 import unittest
+from datetime import date, timedelta
 
-from flashback.scheduler import Grade, ReviewState, review
+from flashback.scheduler import MAX_INTERVAL_DAYS, Grade, ReviewState, review
 
 
 class TestScheduler(unittest.TestCase):
@@ -43,6 +44,20 @@ class TestScheduler(unittest.TestCase):
         new_state = review(state, Grade.HARD)
         self.assertLess(new_state.easiness, state.easiness)
         self.assertEqual(new_state.repetitions, 3)
+
+    def test_repeated_easy_reviews_cap_interval_instead_of_growing_unbounded(self):
+        # Easiness has no ceiling, so interval_days = round(interval * easiness)
+        # compounds exponentially on a run of EASY grades. Uncapped, this
+        # reaches an interval so large that `today + timedelta(days=...)`
+        # overflows datetime.date's range a few dozen reviews in (session 52
+        # found it in 14, starting from defaults). The cap must hold no
+        # matter how long the streak runs, and the result must always be a
+        # valid, addable date.
+        state = ReviewState()
+        for _ in range(200):
+            state = review(state, Grade.EASY)
+            self.assertLessEqual(state.interval_days, MAX_INTERVAL_DAYS)
+        date.today() + timedelta(days=state.interval_days)
 
 
 if __name__ == "__main__":

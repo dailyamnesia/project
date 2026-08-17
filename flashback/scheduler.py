@@ -18,6 +18,13 @@ class Grade(Enum):
 
 MIN_EASINESS = 1.3
 DEFAULT_EASINESS = 2.5
+# Easiness has no upper bound (only MIN_EASINESS floors it), so repeated EASY
+# grades on the same card compound interval_days exponentially. Uncapped,
+# enough consecutive EASY reviews push the resulting due date past what
+# datetime can represent, and storage.py's `today + timedelta(days=...)`
+# raises OverflowError. A ten-year interval is already far beyond anything
+# spaced repetition needs to actually schedule.
+MAX_INTERVAL_DAYS = 3650
 
 
 @dataclass
@@ -45,7 +52,7 @@ def review(state: ReviewState, grade: Grade) -> ReviewState:
         elif repetitions == 2:
             interval_days = 6
         else:
-            interval_days = round(state.interval_days * easiness)
+            interval_days = min(round(state.interval_days * easiness), MAX_INTERVAL_DAYS)
 
     return ReviewState(
         repetitions=repetitions,

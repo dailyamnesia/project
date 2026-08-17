@@ -159,7 +159,9 @@ and those numbers update:
 - **Hard / Good / Easy** all count as a successful recall. The interval
   grows — 1 day, then 6 days, then roughly `previous interval × easiness`
   — and the easiness factor adjusts up or down depending on how much
-  effort the recall took.
+  effort the recall took. The interval is capped at 10 years, so a long
+  streak of easy reviews can't push a card's next review date out far
+  enough to break normal date arithmetic.
 
 This is a simplified version of SuperMemo's SM-2 algorithm (four grades
 instead of SM-2's original six, to keep review fast). The exact math is in
