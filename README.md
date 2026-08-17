@@ -176,6 +176,12 @@ per-card history) is kept separately in a local SQLite database at
 `.flashback/state.sqlite3`, since that's specific to you and not something
 you'd want to diff or merge. It's already in `.gitignore`.
 
+`add`/`remove`/`edit` never write a deck file in place — each writes the
+new content to a temp file next to it and atomically renames it over the
+original. If the write is interrupted partway (disk full, the process
+killed), the deck file is left exactly as it was; you never end up with a
+half-written or empty deck file.
+
 ## Development
 
 ```bash

@@ -113,6 +113,29 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
         self.assertEqual(len(parse_deck(before)), 1)
 
+    def test_write_failure_does_not_destroy_the_deck_files_existing_cards(self):
+        # Path.write_text opens in 'w' mode, which truncates the file to zero
+        # bytes before writing a single byte of the new content. Anything
+        # that interrupts the write after that point — disk full, the
+        # process killed, permissions revoked mid-write — used to leave the
+        # deck file empty, destroying every card it already held, not just
+        # failing the one `add` in progress. simulate_disk_full replicates
+        # that real truncate-then-fail sequence rather than just raising,
+        # so this actually exercises the bug instead of skipping past it.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        deck_path = self.decks_dir / "spanish.md"
+        before = deck_path.read_text(encoding="utf-8")
+
+        def simulate_disk_full(self_path, data, encoding=None, errors=None, newline=None):
+            self_path.write_bytes(b"")
+            raise OSError("simulated disk full mid-write")
+
+        with patch.object(Path, "write_text", simulate_disk_full):
+            rc = self.run_flashback("add", "spanish", "-q", "goodbye?", "-a", "adios")
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):
@@ -169,6 +192,25 @@ class TestRemoveCommand(unittest.TestCase):
 
         cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
         self.assertEqual([c.question for c in cards], ["bad"])
+
+    def test_write_failure_does_not_destroy_the_deck_files_existing_cards(self):
+        # Same reasoning as add's equivalent test: a write failure mid-`remove`
+        # used to truncate the whole deck file, deleting every card it held —
+        # not just leaving the targeted card un-removed.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("add", "spanish", "-q", "goodbye?", "-a", "adios")
+        deck_path = self.decks_dir / "spanish.md"
+        before = deck_path.read_text(encoding="utf-8")
+
+        def simulate_disk_full(self_path, data, encoding=None, errors=None, newline=None):
+            self_path.write_bytes(b"")
+            raise OSError("simulated disk full mid-write")
+
+        with patch.object(Path, "write_text", simulate_disk_full):
+            rc = self.run_flashback("remove", "spanish", "-q", "hello?")
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
 
 
 class TestEditCommand(unittest.TestCase):
@@ -251,6 +293,25 @@ class TestEditCommand(unittest.TestCase):
 
         cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
         self.assertEqual(cards[0].answer, "hola!")
+
+    def test_write_failure_does_not_destroy_the_deck_files_existing_cards(self):
+        # Same reasoning as add's equivalent test: a write failure mid-`edit`
+        # used to truncate the whole deck file, deleting every card it held —
+        # not just leaving the intended edit unapplied.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("add", "spanish", "-q", "goodbye?", "-a", "adios")
+        deck_path = self.decks_dir / "spanish.md"
+        before = deck_path.read_text(encoding="utf-8")
+
+        def simulate_disk_full(self_path, data, encoding=None, errors=None, newline=None):
+            self_path.write_bytes(b"")
+            raise OSError("simulated disk full mid-write")
+
+        with patch.object(Path, "write_text", simulate_disk_full):
+            rc = self.run_flashback("edit", "spanish", "-q", "hello?", "--new-answer", "hola!")
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
 
 
 class TestSyncCommand(unittest.TestCase):

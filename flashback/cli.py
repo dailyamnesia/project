@@ -1,6 +1,7 @@
 """Command-line interface for flashback."""
 
 import argparse
+import os
 import sqlite3
 import sys
 from datetime import date
@@ -39,6 +40,27 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     if "/" in name or "\\" in name or name in (".", ".."):
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
     return None
+
+
+def _atomic_write_text(path: Path, data: str) -> None:
+    """Replace `path`'s content with `data` without ever leaving it truncated.
+
+    `Path.write_text` opens in 'w' mode, which truncates the file to zero
+    bytes *before* writing anything — anything that interrupts the write
+    after that point (disk full, the process killed, permissions revoked
+    mid-write) leaves the deck file empty, destroying every card it held,
+    not just failing the one add/remove/edit that was in progress. Writing
+    to a sibling temp file and `os.replace`-ing it into place means a failed
+    write only ever loses the disposable temp file — `path` itself is
+    either the old content or the new content, never a partial one.
+    """
+    tmp_path = path.with_name(f".{path.name}.tmp{os.getpid()}")
+    try:
+        tmp_path.write_text(data, encoding="utf-8")
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def cmd_sync(args):
@@ -97,7 +119,7 @@ def cmd_add(args):
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    deck_path.write_text(new_text, encoding="utf-8")
+    _atomic_write_text(deck_path, new_text)
     print(f"added to {deck_path} (run `flashback sync` to pick it up)")
     return 0
 
@@ -123,7 +145,7 @@ def cmd_remove(args):
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    deck_path.write_text(new_text, encoding="utf-8")
+    _atomic_write_text(deck_path, new_text)
     print(
         f"removed from {deck_path} (run `flashback sync` to pick it up — "
         "this card's review history will be deleted on next sync)"
@@ -177,7 +199,7 @@ def cmd_edit(args):
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    deck_path.write_text(new_text, encoding="utf-8")
+    _atomic_write_text(deck_path, new_text)
     note = ""
     if new_question is not None and new_question.strip() != question:
         note = (
