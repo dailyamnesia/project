@@ -184,6 +184,12 @@ original. If the write is interrupted partway (disk full, the process
 killed), the deck file is left exactly as it was; you never end up with a
 half-written or empty deck file.
 
+`add`/`remove`/`edit` also serialize against each other, per deck: if two
+run against the same deck at the same time (e.g. importing many cards from
+a backgrounded shell loop), one waits for the other instead of both reading
+the same starting content and one silently overwriting the other's change.
+POSIX-only (Linux/macOS); on Windows this coordination is skipped.
+
 `sync` commits each deck's changes to the review database as soon as
 that deck is processed, not once at the very end. If `sync` is
 interrupted partway through a run with many decks (Ctrl-C, a closed

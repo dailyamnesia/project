@@ -1,5 +1,6 @@
 import os
 import tempfile
+import threading
 import unittest
 from datetime import date
 from pathlib import Path
@@ -20,9 +21,12 @@ class TestAddCommand(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
 
     def run_flashback(self, *args):
-        return main(["--decks-dir", str(self.decks_dir), *args])
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
 
     def test_creates_deck_file_and_dir_if_missing(self):
         self.assertFalse(self.decks_dir.exists())
@@ -137,15 +141,53 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
 
+    @unittest.skipIf(os.name == "nt", "the lock this guards against is POSIX-only (fcntl)")
+    def test_concurrent_adds_to_the_same_deck_do_not_lose_cards(self):
+        # Regression test for a real race: two `add`s to the same deck each
+        # read the same starting file content, independently compute their
+        # own updated version, and whichever writes last used to win
+        # outright — the other process's card silently vanished, with a
+        # normal "added" success message and exit code 0 on both sides.
+        # _atomic_write_text's atomicity (session 48) doesn't help here:
+        # this is a lost update between two otherwise-correct writers, not a
+        # torn write. Many threads racing the same deck reliably interleaves
+        # the read-modify-write windows; a single pair sometimes happened to
+        # serialize anyway even against the old, unlocked code.
+        barrier = threading.Barrier(8)
+        errors = []
+
+        def worker(i):
+            barrier.wait()
+            try:
+                rc = self.run_flashback("add", "spanish", "-q", f"q{i}?", "-a", f"a{i}")
+                if rc != 0:
+                    errors.append(f"worker {i} exited {rc}")
+            except Exception as exc:  # noqa: BLE001 - recording, not swallowing
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        deck_path = self.decks_dir / "spanish.md"
+        cards = parse_deck(deck_path.read_text(encoding="utf-8"))
+        self.assertEqual({c.question for c in cards}, {f"q{i}?" for i in range(8)})
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
 
     def run_flashback(self, *args):
-        return main(["--decks-dir", str(self.decks_dir), *args])
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
 
     def test_removes_a_card_from_an_existing_deck(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
@@ -219,9 +261,12 @@ class TestEditCommand(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
 
     def run_flashback(self, *args):
-        return main(["--decks-dir", str(self.decks_dir), *args])
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
 
     def test_edits_answer_in_place(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
@@ -313,6 +358,43 @@ class TestEditCommand(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
+
+    @unittest.skipIf(os.name == "nt", "the lock this guards against is POSIX-only (fcntl)")
+    def test_concurrent_edits_to_different_cards_in_the_same_deck_do_not_lose_changes(self):
+        # Same race as add's equivalent test, but for edit: each worker reads
+        # the deck, prompting/argument-parsing takes some (real, if small)
+        # time, then it writes an updated version back. Without serializing
+        # this, two edits to two different cards in the same deck could each
+        # compute their new text from the same pre-edit snapshot, and
+        # whichever writes last would silently discard the other's change —
+        # not just fail to apply it, but revert it with no error at all.
+        for i in range(8):
+            self.run_flashback("add", "spanish", "-q", f"q{i}?", "-a", f"original{i}")
+
+        barrier = threading.Barrier(8)
+        errors = []
+
+        def worker(i):
+            barrier.wait()
+            try:
+                rc = self.run_flashback(
+                    "edit", "spanish", "-q", f"q{i}?", "--new-answer", f"updated{i}"
+                )
+                if rc != 0:
+                    errors.append(f"worker {i} exited {rc}")
+            except Exception as exc:  # noqa: BLE001 - recording, not swallowing
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        deck_path = self.decks_dir / "spanish.md"
+        cards = {c.question: c.answer for c in parse_deck(deck_path.read_text(encoding="utf-8"))}
+        self.assertEqual(cards, {f"q{i}?": f"updated{i}" for i in range(8)})
 
 
 class TestSyncCommand(unittest.TestCase):

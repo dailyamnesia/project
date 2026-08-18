@@ -4,6 +4,7 @@ import argparse
 import os
 import sqlite3
 import sys
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -12,6 +13,11 @@ from . import __version__
 from .parser import ParseError, append_card, edit_card, parse_deck, remove_card
 from .scheduler import Grade
 from .storage import deck_stats, due_cards, open_db, prune_missing_decks, record_review, sync_deck
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no fcntl
+    fcntl = None
 
 GRADE_KEYS = {
     "1": Grade.AGAIN,
@@ -61,6 +67,47 @@ def _atomic_write_text(path: Path, data: str) -> None:
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
+
+
+def _deck_lock_path(args, deck: str) -> Path:
+    return Path(args.state_dir) / "locks" / f"{deck}.lock"
+
+
+@contextmanager
+def _deck_lock(lock_path: Path):
+    """Serialize add/remove/edit's read-modify-write section for one deck file.
+
+    Without this, two flashback processes touching the *same* deck at once
+    (e.g. a shell loop backgrounding several `add` calls to import many
+    cards quickly) can each read the same starting content, compute their
+    own updated version independently, and whichever writes last silently
+    wins — the other process's card is dropped entirely, with no error and
+    a normal "added"/"edited"/"removed" success message printed by both.
+    `_atomic_write_text` already makes each individual write atomic, but
+    atomicity alone doesn't help here: this is a lost update between two
+    otherwise-correct writers racing each other, not a torn write.
+
+    Locks a file under `--state-dir`, not a file living alongside the deck
+    itself, using an OS-level advisory lock (`fcntl.flock`) rather than a
+    lock file whose mere existence signals "locked": `flock` is released
+    automatically when its file descriptor closes, including if the holding
+    process is killed, so there's no stale lock to clean up by hand, and
+    nothing new shows up next to the user's own deck files. POSIX-only, like
+    the rest of this project has no separate Windows handling either; on
+    Windows this is a no-op and the pre-existing race remains, no worse than
+    before this fix.
+    """
+    if fcntl is None:
+        yield
+        return
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def cmd_sync(args):
@@ -121,14 +168,15 @@ def cmd_add(args):
     question = args.question if args.question is not None else input("Q: ")
     answer = args.answer if args.answer is not None else input("A: ")
 
-    existing_text = deck_path.read_text(encoding="utf-8") if deck_path.exists() else ""
-    try:
-        new_text = append_card(existing_text, question, answer)
-    except ParseError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+    with _deck_lock(_deck_lock_path(args, args.deck)):
+        existing_text = deck_path.read_text(encoding="utf-8") if deck_path.exists() else ""
+        try:
+            new_text = append_card(existing_text, question, answer)
+        except ParseError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
-    _atomic_write_text(deck_path, new_text)
+        _atomic_write_text(deck_path, new_text)
     print(f"added to {deck_path} (run `flashback sync` to pick it up)")
     return 0
 
@@ -147,14 +195,15 @@ def cmd_remove(args):
 
     question = args.question if args.question is not None else input("Q: ")
 
-    existing_text = deck_path.read_text(encoding="utf-8")
-    try:
-        new_text = remove_card(existing_text, question)
-    except ParseError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+    with _deck_lock(_deck_lock_path(args, args.deck)):
+        existing_text = deck_path.read_text(encoding="utf-8")
+        try:
+            new_text = remove_card(existing_text, question)
+        except ParseError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
-    _atomic_write_text(deck_path, new_text)
+        _atomic_write_text(deck_path, new_text)
     print(
         f"removed from {deck_path} (run `flashback sync` to pick it up — "
         "this card's review history will be deleted on next sync)"
@@ -176,14 +225,14 @@ def cmd_edit(args):
 
     question = (args.question if args.question is not None else input("Q: ")).strip()
 
-    existing_text = deck_path.read_text(encoding="utf-8")
+    preview_text = deck_path.read_text(encoding="utf-8")
     try:
         # validate=False: this is just a lookup to show the card's current
         # text before prompting — it shouldn't be blocked by some other,
         # unrelated card in the same deck failing _check_card_text.
         # edit_card() below still validates whatever new text is actually
         # written.
-        match = next((c for c in parse_deck(existing_text, validate=False) if c.question == question), None)
+        match = next((c for c in parse_deck(preview_text, validate=False) if c.question == question), None)
     except ParseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -202,13 +251,21 @@ def cmd_edit(args):
             print("nothing changed.")
             return 0
 
-    try:
-        new_text = edit_card(existing_text, question, new_question=new_question, new_answer=new_answer)
-    except ParseError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+    # Re-read existing_text fresh here, inside the lock, rather than reusing
+    # preview_text above: the interactive prompting in between can take
+    # arbitrarily long, and the file may have changed since preview_text was
+    # read (by another flashback process, or by hand). edit_card() below
+    # must act on the current on-disk content, not a stale snapshot from
+    # before the prompts.
+    with _deck_lock(_deck_lock_path(args, args.deck)):
+        existing_text = deck_path.read_text(encoding="utf-8")
+        try:
+            new_text = edit_card(existing_text, question, new_question=new_question, new_answer=new_answer)
+        except ParseError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
-    _atomic_write_text(deck_path, new_text)
+        _atomic_write_text(deck_path, new_text)
     note = ""
     if new_question is not None and new_question.strip() != question:
         note = (
