@@ -42,9 +42,19 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     lands in a subdirectory `sync`'s non-recursive glob never looks at (`x/y`) — both
     look like they worked (a success message, a file on disk) but the card never
     becomes reachable through the tool again.
+
+    An empty name has the same "looks like it worked" shape for a different reason:
+    it writes to a file literally named `.md`, and `Path(...).stem` — used by `sync`
+    to recover the deck name from the file it globbed — doesn't split a leading dot
+    off as a suffix (the same rule that keeps `.gitignore`'s stem as `.gitignore`,
+    not empty), so the deck reappears everywhere else (`sync`, `due`, `stats`) named
+    `.md` instead of the empty string it was added under. Rejecting it here means
+    `add`/`remove`/`edit` never disagree with `sync` about what a deck is named.
     """
     if "/" in name or "\\" in name or name in (".", ".."):
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
+    if not name:
+        return "invalid deck name: '' (deck name can't be empty)"
     return None
 
 

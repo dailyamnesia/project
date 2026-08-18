@@ -58,6 +58,18 @@ class TestStorage(unittest.TestCase):
             self.assertEqual({r["id"] for r in rows}, {rows[0]["id"], rows[1]["id"]})
             self.assertNotEqual(rows[0]["id"], rows[1]["id"])
 
+    def test_due_cards_with_empty_string_deck_filter_matches_nothing(self):
+        # `if deck:` (the pre-fix check) treats "" the same as not passing --deck
+        # at all, since an empty string is falsy in Python — so a caller asking
+        # for one specific (if unusual) deck named "" would silently see every
+        # deck's due cards instead of correctly seeing none. `deck is not None`
+        # tells "no filter" (None) apart from "filter to this exact deck" ("").
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "geography", parse_deck("Q: capital?\nA: Paris\n"), today)
+            self.assertEqual(len(due_cards(conn, today, deck="")), 0)
+            self.assertEqual(len(due_cards(conn, today, deck=None)), 1)
+
     def test_prune_missing_decks_removes_cards_for_a_deck_no_longer_present(self):
         today = date(2026, 1, 1)
         with open_db(self.db_path) as conn:

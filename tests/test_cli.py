@@ -68,6 +68,17 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_empty_deck_name_is_rejected_instead_of_becoming_a_hidden_dotfile(self):
+        # An empty deck name isn't caught by the slash/./.. checks above, but has
+        # the same "looks like it worked, isn't reachable the same way again"
+        # shape: it writes to a file literally named ".md", and Path(...).stem
+        # (what `sync` uses to recover the deck name from the file it globbed)
+        # doesn't split a leading dot off as a suffix — so the deck comes back
+        # named ".md" everywhere else instead of the "" it was added under.
+        rc = self.run_flashback("add", "", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_embedded_separator_line_is_rejected_without_writing_file(self):
         # Without this check, this would write successfully (a normal "added"
         # message) but corrupt the file: the embedded "---" reads back as a

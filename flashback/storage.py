@@ -92,7 +92,7 @@ def sync_deck(conn, deck: str, cards, today: date):
 def due_cards(conn, today: date, deck: str = None):
     query = "SELECT * FROM cards WHERE due_date <= ?"
     params = [today.isoformat()]
-    if deck:
+    if deck is not None:
         query += " AND deck = ?"
         params.append(deck)
     query += " ORDER BY due_date ASC"
