@@ -4,13 +4,14 @@ import argparse
 import os
 import sqlite3
 import sys
+import unicodedata
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import Optional
 
 from . import __version__
-from .parser import ParseError, append_card, edit_card, parse_deck, remove_card
+from .parser import BIDI_FORMATTING_CLASSES, ParseError, append_card, edit_card, parse_deck, remove_card
 from .scheduler import Grade
 from .storage import deck_stats, due_cards, open_db, prune_missing_decks, record_review, sync_deck
 
@@ -50,11 +51,33 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     not empty), so the deck reappears everywhere else (`sync`, `due`, `stats`) named
     `.md` instead of the empty string it was added under. Rejecting it here means
     `add`/`remove`/`edit` never disagree with `sync` about what a deck is named.
+
+    A control character or Unicode bidirectional-formatting character has the
+    same risk here as in card text (see `_check_card_text` in `parser.py`):
+    every command that lists a deck (`add`'s confirmation, `sync`, `due`,
+    `stats`, `review`) prints its name straight to the terminal, so an
+    embedded ESC or an RLO/LRO override can hide or reorder what's shown just
+    as easily through a deck name as through a question or answer. Unlike
+    card text, tab and newline aren't given an exception here — a deck name
+    is a single-line identifier, and either one already breaks `stats`'s
+    tabular layout.
     """
     if "/" in name or "\\" in name or name in (".", ".."):
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
     if not name:
         return "invalid deck name: '' (deck name can't be empty)"
+    for ch in name:
+        if unicodedata.category(ch) == "Cc":
+            return (
+                f"invalid deck name: {name!r} (contains a control character {ch!r}, "
+                "which can hide or overwrite what's shown on screen)"
+            )
+        if unicodedata.bidirectional(ch) in BIDI_FORMATTING_CLASSES:
+            return (
+                f"invalid deck name: {name!r} (contains a bidirectional-formatting "
+                f"character U+{ord(ch):04X}, which can reorder how surrounding text "
+                "is displayed on screen)"
+            )
     return None
 
 
@@ -132,7 +155,23 @@ def cmd_sync(args):
         deck_names = set()
         for deck_file in sorted(decks_dir.glob("*.md")):
             deck_name = deck_file.stem
+            # Added to deck_names before the name check below (not after), so
+            # a deck that was already synced under this name in a past run
+            # doesn't get pruned by prune_missing_decks just because its name
+            # is now rejected — the same "currently unusable isn't the same
+            # as deleted" reasoning already applied to a ParseError/
+            # UnicodeDecodeError/OSError below.
             deck_names.add(deck_name)
+            # add/remove/edit already reject a bad deck name before writing,
+            # but a deck file can also be created or renamed by hand outside
+            # the CLI (documented as normal — see parse_deck's own validate
+            # path) — without this check, sync would read the file fine and
+            # print its control-character/bidi-override-laden name straight
+            # to the terminal in every command that lists decks afterward.
+            name_error = _invalid_deck_name(deck_name)
+            if name_error is not None:
+                print(f"skipping {deck_file}: {name_error}", file=sys.stderr)
+                continue
             try:
                 cards = parse_deck(deck_file.read_text(encoding="utf-8"))
             except (ParseError, UnicodeDecodeError, OSError) as exc:

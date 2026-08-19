@@ -147,6 +147,12 @@ Ordinary right-to-left text (Hebrew, Arabic, etc.) and emoji sequences are
 unaffected; only the small set of explicit formatting-control characters
 is rejected.
 
+A deck name is restricted the same way, for the same reason: `add`,
+`remove`, and `edit` reject a control character or bidirectional-formatting
+character in a deck name, since `sync`/`due`/`stats`/`review` all print the
+deck name straight to the terminal too. Unlike card text, tab and newline
+aren't allowed either — a deck name is a single-line identifier.
+
 ## How scheduling works
 
 Each card tracks three numbers: how many times in a row you've recalled it

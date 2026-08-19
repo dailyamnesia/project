@@ -79,6 +79,24 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_control_character_is_rejected(self):
+        # Deck names are echoed straight to the terminal by add's own
+        # confirmation, sync, due, stats, and review — an embedded ESC used
+        # to write and round-trip fine, then hide or overwrite part of every
+        # one of those listings, the same risk _check_card_text already
+        # blocks for card text but this deck-name path left wide open.
+        rc = self.run_flashback("add", "evil\x1b[31mred", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
+    def test_deck_name_with_bidi_override_is_rejected(self):
+        # RLO (U+202E) isn't a control character, but it reorders how
+        # everything after it displays in every command that lists deck
+        # names — the same Trojan-Source trick already blocked in card text.
+        rc = self.run_flashback("add", "evil‮txt.exe", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_embedded_separator_line_is_rejected_without_writing_file(self):
         # Without this check, this would write successfully (a normal "added"
         # message) but corrupt the file: the embedded "---" reads back as a
@@ -509,6 +527,27 @@ class TestSyncCommand(unittest.TestCase):
         # interruption — it must actually be in the database, not rolled
         # back just because a later deck in the same run failed.
         self.assertIn("alpha", rows)
+
+    def test_hand_created_deck_file_with_control_character_name_is_skipped(self):
+        # Deck files are documented as normal to hand-edit/hand-create
+        # directly, not just write through the CLI — add/remove/edit reject
+        # a control-character deck name before writing, but a file created
+        # or renamed by hand outside the CLI reaches sync unguarded. Without
+        # this check, sync would happily load it and print the raw ESC byte
+        # straight to the terminal in its own "N cards" confirmation line,
+        # and in every due/stats/review listing afterward.
+        self.run_flashback("add", "french", "-q", "bonjour?", "-a", "hello")
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "evil\x1b[31mred.md").write_text("Q: q1\nA: a1\n", encoding="utf-8")
+
+        rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = due_cards(conn, date.today())
+        # Only the legitimate deck's card made it into the database — the
+        # bad-named deck was skipped, not silently loaded.
+        self.assertEqual({r["question"] for r in rows}, {"bonjour?"})
 
     def test_directory_matching_deck_glob_is_skipped_not_a_crash(self):
         # decks_dir.glob("*.md") matches directories too, not just files —
