@@ -388,6 +388,13 @@ def cmd_review(args):
             # same session too — even ones that already printed "next
             # review: ..." as if they were saved.
             conn.commit()
+            if due is None:
+                # The card was removed (e.g. by `remove` + `sync` in another
+                # invocation) between being shown and being graded — nothing
+                # was saved, so don't claim a next-review date that never
+                # happened.
+                print("  card no longer exists, skipped\n")
+                continue
             print(f"  next review: {due.isoformat()}\n")
             reviewed += 1
 

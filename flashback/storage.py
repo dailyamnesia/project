@@ -107,7 +107,7 @@ def record_review(conn, card_row, grade: Grade, today: date):
     )
     new_state = apply_review(state, grade)
     due = today + timedelta(days=new_state.interval_days)
-    conn.execute(
+    cursor = conn.execute(
         """UPDATE cards
            SET repetitions = ?, interval_days = ?, easiness = ?, due_date = ?, last_reviewed = ?
            WHERE id = ?""",
@@ -120,6 +120,8 @@ def record_review(conn, card_row, grade: Grade, today: date):
             card_row["id"],
         ),
     )
+    if cursor.rowcount == 0:
+        return None
     return due
 
 

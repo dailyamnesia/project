@@ -203,6 +203,12 @@ terminal), every deck already reported as synced is genuinely saved —
 only the deck in progress at the moment of interruption is left for the
 next `sync` to pick up.
 
+If a card gets removed (by `remove` + `sync`, possibly from another
+terminal) after `review` has already shown it but before you grade it,
+`review` prints `card no longer exists, skipped` instead of a `next
+review: ...` date — grading a card that isn't in the database anymore
+can't actually be saved, so it doesn't claim otherwise.
+
 ## Development
 
 ```bash

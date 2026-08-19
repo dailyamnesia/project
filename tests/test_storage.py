@@ -143,6 +143,15 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(len(due_cards(conn, today)), 0)
             self.assertEqual(len(due_cards(conn, due)), 1)
 
+    def test_record_review_on_already_deleted_card_returns_none(self):
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "d", parse_deck("Q: a\nA: 1\n"), today)
+            row = due_cards(conn, today)[0]
+            conn.execute("DELETE FROM cards WHERE id = ?", (row["id"],))
+            due = record_review(conn, row, Grade.GOOD, today)
+            self.assertIsNone(due)
+
 
 if __name__ == "__main__":
     unittest.main()

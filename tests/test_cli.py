@@ -1,7 +1,9 @@
+import io
 import os
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stdout
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -623,6 +625,49 @@ class TestReviewCommand(unittest.TestCase):
         self.assertNotEqual(rows["two?"]["due_date"], date.today().isoformat())
         # the interrupted third card was never graded, so it's untouched
         self.assertEqual(rows["three?"]["repetitions"], 0)
+
+    def test_grading_a_card_removed_mid_session_does_not_claim_a_fake_save(self):
+        # A second `flashback remove` + `sync` invocation can race an
+        # in-progress `review` session: the card is shown and its answer
+        # revealed, then deleted from the database before the person grades
+        # it. `record_review`'s UPDATE then matches zero rows — the grade
+        # was never saved, and `review` must say so instead of printing a
+        # confirmed "next review" date for a card that no longer exists.
+        self.run_flashback("add", "spanish", "-q", "one?", "-a", "uno")
+        self.run_flashback("add", "spanish", "-q", "two?", "-a", "dos")
+        self.run_flashback("sync")
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            two_id = conn.execute(
+                "SELECT id FROM cards WHERE question = ?", ("two?",)
+            ).fetchone()["id"]
+
+        scripted = iter(["", "3", ""])  # reveal one, grade one good, reveal two
+
+        def fake_input(prompt):
+            try:
+                return next(scripted)
+            except StopIteration:
+                # about to be asked to grade "two?" -- simulate a `remove` +
+                # `sync` racing in between reveal and grade.
+                with open_db(self.state_dir / "state.sqlite3") as conn:
+                    conn.execute("DELETE FROM cards WHERE id = ?", (two_id,))
+                    conn.commit()
+                return "3"
+
+        out = io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stdout(out):
+            rc = self.run_flashback("review")
+        self.assertEqual(rc, 0)
+
+        output = out.getvalue()
+        self.assertIn("card no longer exists, skipped", output)
+        self.assertNotIn("next review", output.split("two?")[1])
+        self.assertEqual(output.count("next review"), 1)
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = {row["question"]: row for row in conn.execute("SELECT question FROM cards")}
+        self.assertNotIn("two?", rows)
 
 
 @unittest.skipIf(_RUNNING_AS_ROOT, "root ignores file-mode write protection")
