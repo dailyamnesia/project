@@ -198,6 +198,48 @@ class TestStorage(unittest.TestCase):
             # is genuinely interval_days doing the work, not a coincidence.
             self.assertGreater(rows[0]["easiness"], rows[1]["easiness"])
 
+    def test_hard_cards_breaks_ties_through_the_full_sort_chain(self):
+        # Session 68's real usage found a genuine three-way tie on
+        # interval_days that fell through easiness, then repetitions, then
+        # finally question text — every level of the documented ORDER BY
+        # actually exercised at once, live, none of it staged. No test had
+        # ever driven a tie deep enough to reach the third or fourth key;
+        # the existing tests each differ on the very first one
+        # (interval_days) and never even reach easiness. Direct field
+        # writes here (like test_next_due_date_respects_the_deck_filter's
+        # own due_date UPDATE above) construct exact ties that grading
+        # sequences alone can't reliably hit — the point is the ORDER BY
+        # chain, not how a card arrived at these numbers.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            self._graded(
+                conn,
+                today,
+                "d",
+                "Q: zulu\nA: 1\n---\nQ: yankee\nA: 2\n---\nQ: bravo\nA: 3\n---\nQ: alpha\nA: 4\n",
+                {q: [Grade.AGAIN, Grade.GOOD] for q in ("zulu", "yankee", "bravo", "alpha")},
+            )
+            # All four tie on interval_days; zulu alone differs on easiness
+            # (loses); yankee ties easiness with bravo/alpha but differs on
+            # repetitions (loses); bravo and alpha tie on everything but
+            # question text, where alpha sorts first.
+            conn.execute(
+                "UPDATE cards SET interval_days = 10, easiness = 1.5, repetitions = 5 "
+                "WHERE question = 'zulu'"
+            )
+            conn.execute(
+                "UPDATE cards SET interval_days = 10, easiness = 1.3, repetitions = 5 "
+                "WHERE question = 'yankee'"
+            )
+            conn.execute(
+                "UPDATE cards SET interval_days = 10, easiness = 1.3, repetitions = 2 "
+                "WHERE question IN ('bravo', 'alpha')"
+            )
+            rows = hard_cards(conn)
+            self.assertEqual(
+                [row["question"] for row in rows], ["alpha", "bravo", "yankee", "zulu"]
+            )
+
     def test_hard_cards_respects_the_deck_filter(self):
         today = date(2026, 1, 1)
         with open_db(self.db_path) as conn:
