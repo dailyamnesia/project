@@ -10,6 +10,7 @@ from flashback.scheduler import Grade
 from flashback.storage import (
     SCHEMA,
     due_cards,
+    ensure_state_dir,
     hard_cards,
     next_due_date,
     open_db,
@@ -330,6 +331,39 @@ class TestStorage(unittest.TestCase):
             conn.execute("DELETE FROM cards WHERE id = ?", (row["id"],))
             due = record_review(conn, row, Grade.GOOD, today)
             self.assertIsNone(due)
+
+    def test_open_db_seeds_a_gitignore_in_a_freshly_created_state_dir(self):
+        # A user following the README into their own git-tracked decks
+        # folder has no reason to know the review database needs its own
+        # .gitignore entry — flashback should make that true on its own the
+        # first time it creates the directory, not rely on the README to
+        # tell them.
+        fresh_state_dir = Path(self.tmpdir.name) / "fresh" / ".flashback"
+        with open_db(fresh_state_dir / "state.sqlite3"):
+            pass
+        self.assertEqual((fresh_state_dir / ".gitignore").read_text(encoding="utf-8"), "*\n")
+
+    def test_open_db_does_not_touch_a_gitignore_in_a_preexisting_state_dir(self):
+        # --state-dir is user-supplied; if it already pointed at something
+        # before flashback ran, that's not a directory flashback created and
+        # it shouldn't start dropping files into it that weren't there
+        # before, however small.
+        preexisting = Path(self.tmpdir.name)  # setUp's TemporaryDirectory, already exists
+        db_path = preexisting / "state.sqlite3"
+        with open_db(db_path):
+            pass
+        self.assertFalse((preexisting / ".gitignore").exists())
+
+    def test_ensure_state_dir_does_not_overwrite_a_hand_edited_gitignore(self):
+        state_dir = Path(self.tmpdir.name) / "fresh2"
+        ensure_state_dir(state_dir)
+        (state_dir / ".gitignore").write_text("*\n!keep-this.txt\n", encoding="utf-8")
+        # A later call (e.g. the next `flashback sync`) must not clobber a
+        # line the user added themselves.
+        ensure_state_dir(state_dir)
+        self.assertEqual(
+            (state_dir / ".gitignore").read_text(encoding="utf-8"), "*\n!keep-this.txt\n"
+        )
 
 
 if __name__ == "__main__":

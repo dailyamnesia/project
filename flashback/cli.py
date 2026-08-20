@@ -16,6 +16,7 @@ from .scheduler import Grade
 from .storage import (
     deck_stats,
     due_cards,
+    ensure_state_dir,
     hard_cards,
     next_due_date,
     open_db,
@@ -142,6 +143,11 @@ def _deck_lock(lock_path: Path):
     if fcntl is None:
         yield
         return
+    # add/remove/edit never touch the database, so this is the only mkdir
+    # of `--state-dir` on their path — route it through the same helper
+    # `open_db` uses so a `.gitignore` gets seeded here too, not just when
+    # `sync`/`review`/etc. happen to run first.
+    ensure_state_dir(lock_path.parent.parent)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
     try:

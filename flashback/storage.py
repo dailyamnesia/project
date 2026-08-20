@@ -39,10 +39,31 @@ def card_id(deck: str, question: str) -> str:
     return digest[:16]
 
 
+def ensure_state_dir(state_dir: Path) -> Path:
+    """Create `--state-dir` if it doesn't exist yet, and if this call is
+    what created it, drop a `.gitignore` (`*`) inside so a user who puts
+    their decks under git doesn't also commit their review database by
+    accident — it's personal review state, not deck content, the same
+    reasoning the README already gives for keeping it out of git.
+
+    Only writes the `.gitignore` when *this* call created the directory.
+    If it already existed, leave it alone — `--state-dir` is user-supplied
+    and could point at a directory that predates flashback for some other
+    reason (e.g. `--state-dir .`); silently blanket-ignoring an existing
+    directory's contents would be a real footgun, not a convenience.
+    """
+    state_dir = Path(state_dir)
+    is_new = not state_dir.exists()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    if is_new:
+        (state_dir / ".gitignore").write_text("*\n", encoding="utf-8")
+    return state_dir
+
+
 @contextmanager
 def open_db(db_path: Path):
     db_path = Path(db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_state_dir(db_path.parent)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:

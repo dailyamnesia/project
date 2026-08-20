@@ -245,7 +245,10 @@ Card *content* stays in your deck files — plain text, meant to be
 committed to git if you want. Review *state* (your progress, due dates,
 per-card history) is kept separately in a local SQLite database at
 `.flashback/state.sqlite3`, since that's specific to you and not something
-you'd want to diff or merge. It's already in `.gitignore`.
+you'd want to diff or merge. The first time any command creates that
+directory, it drops a `.gitignore` inside it too, so if your decks live in
+a git repo you won't end up committing your review database along with
+them without meaning to.
 
 `add`/`remove`/`edit` never write a deck file in place — each writes the
 new content to a temp file next to it and atomically renames it over the

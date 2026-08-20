@@ -57,6 +57,16 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse((self.decks_dir / "spanish.md").exists())
 
+    def test_add_seeds_state_dir_gitignore_even_though_it_never_touches_the_db(self):
+        # add/remove/edit never call open_db, only _deck_lock — this is the
+        # one place a fresh --state-dir could be created without ever going
+        # through open_db's own .gitignore seeding, if the two paths weren't
+        # both wired to the same helper.
+        self.assertFalse(self.state_dir.exists())
+        rc = self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.assertEqual(rc, 0)
+        self.assertEqual((self.state_dir / ".gitignore").read_text(encoding="utf-8"), "*\n")
+
     def test_deck_name_with_slash_is_rejected_instead_of_landing_outside_decks_dir(self):
         # A slash either escapes decks-dir (`../x`) or lands somewhere `sync`'s
         # non-recursive glob never looks (`x/y`) — either way the card would look
