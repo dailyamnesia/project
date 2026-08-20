@@ -16,6 +16,7 @@ from .scheduler import Grade
 from .storage import (
     deck_stats,
     due_cards,
+    hard_cards,
     next_due_date,
     open_db,
     prune_missing_decks,
@@ -371,10 +372,84 @@ def cmd_stats(args):
     if not rows:
         print("no decks yet. run `flashback sync` first.")
         return 0
-    print(f"{'deck':<20} {'total':>6} {'due':>6}  next")
+    print(f"{'deck':<20} {'total':>6} {'due':>6} {'missed':>7}  next")
     for row in rows:
-        print(f"{row['deck']:<20} {row['total']:>6} {row['due'] or 0:>6}  {row['next_due'] or '-'}")
+        print(
+            f"{row['deck']:<20} {row['total']:>6} {row['due'] or 0:>6} "
+            f"{row['missed'] or 0:>7}  {row['next_due'] or '-'}"
+        )
     return 0
+
+
+def _cards(count):
+    return f"{count} card" if count == 1 else f"{count} cards"
+
+
+def _print_hard_group(rows, limit, detail):
+    """Print one group of hard cards, in `review`'s own [deck]/Q: shape.
+
+    Truncation is announced rather than silent: a list of what you're bad at
+    that quietly stops at ten would read as a complete answer when it isn't.
+    """
+    shown = rows[:limit] if limit > 0 else rows
+    for row in shown:
+        print(f"[{row['deck']}]")
+        print(f"Q: {row['question']}")
+        print(f"   {detail(row)}")
+    hidden = len(rows) - len(shown)
+    if hidden:
+        print(f"... and {hidden} more (raise --limit to see them)")
+
+
+def cmd_hard(args):
+    today = date.today()
+    with open_db(_db_path(args)) as conn:
+        total = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+        rows = hard_cards(conn, args.deck)
+    if not total:
+        print("no decks yet. run `flashback sync` first.")
+        return 0
+    if not rows:
+        print("nothing looks hard yet — no card has been graded `again` or `hard`")
+        print("more than it's been graded `easy`.")
+        return 0
+
+    # Two groups, not one ranked list. Easiness alone can't tell "missed this
+    # morning" apart from "struggled with a month ago, fine now" — it barely
+    # recovers once it's fallen — so a single hardest-first list would put a
+    # card you've since mastered at the top. See storage.hard_cards.
+    missed = [row for row in rows if row["currently_missed"]]
+    recovering = [row for row in rows if not row["currently_missed"]]
+
+    if missed:
+        print(f"{_cards(len(missed))} you missed at your last review:\n")
+        _print_hard_group(missed, args.limit, lambda row: _when_due(row["due_date"], today))
+    if recovering:
+        if missed:
+            print()
+        print(f"{_cards(len(recovering))} you've found hard before, but are getting right now:\n")
+        _print_hard_group(
+            recovering,
+            args.limit,
+            lambda row: f"{_streak(row['repetitions'])}; next review {row['due_date']}",
+        )
+    return 0
+
+
+def _when_due(due_date, today):
+    days = (date.fromisoformat(due_date) - today).days
+    if days <= 0:
+        return "due now"
+    if days == 1:
+        return "due tomorrow"
+    return f"due {due_date}"
+
+
+def _streak(count):
+    """`repetitions` is the run of correct reviews since the last failed one."""
+    if count == 1:
+        return "correct at your last review"
+    return f"correct at your last {count} reviews"
 
 
 def cmd_review(args):
@@ -475,6 +550,16 @@ def build_parser():
 
     p_stats = sub.add_parser("stats", help="show per-deck totals")
     p_stats.set_defaults(func=cmd_stats)
+
+    p_hard = sub.add_parser("hard", help="show the cards you've found hardest")
+    p_hard.add_argument("--deck", help="limit to a single deck")
+    p_hard.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="most cards to show per group (default: 10; 0 for all)",
+    )
+    p_hard.set_defaults(func=cmd_hard)
 
     return parser
 

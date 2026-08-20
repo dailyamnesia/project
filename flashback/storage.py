@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
 
-from .scheduler import Grade, ReviewState, review as apply_review
+from .scheduler import DEFAULT_EASINESS, Grade, ReviewState, review as apply_review
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cards (
@@ -117,6 +117,35 @@ def next_due_date(conn, today: date, deck: str = None):
     return date.fromisoformat(value) if value else None
 
 
+def hard_cards(conn, deck: str = None):
+    """Cards whose grading history has pushed easiness below its starting value.
+
+    Every card starts at DEFAULT_EASINESS, and only `again` (-0.8) and `hard`
+    (-0.14) move it down — `good` leaves it alone and `easy` adds 0.1. So this
+    isn't an arbitrary cutoff: it's exactly "cards you have, on balance, gotten
+    wrong or found hard at some point".
+
+    Ordered worst-first, but "worst" deliberately leads with `currently_missed`
+    rather than with easiness alone. Easiness only ever creeps back up (+0.1 at
+    best, and never past MIN_EASINESS's floor in a hurry), so a card you
+    struggled with weeks ago and have since gotten right four times running
+    still reads exactly as low as one you missed this morning. Sorting on
+    easiness alone would put a card you've actually mastered at the top of a
+    list headed "you're struggling with this" — a confident wrong answer, which
+    is worse than not answering. `repetitions` resets to 0 on any failed
+    recall, so it's the part of the stored state that tracks *lately*.
+    """
+    query = """SELECT *, (repetitions = 0) AS currently_missed
+               FROM cards
+               WHERE easiness < ? AND last_reviewed IS NOT NULL"""
+    params = [DEFAULT_EASINESS]
+    if deck is not None:
+        query += " AND deck = ?"
+        params.append(deck)
+    query += " ORDER BY currently_missed DESC, easiness ASC, repetitions ASC, question ASC"
+    return conn.execute(query, params).fetchall()
+
+
 def record_review(conn, card_row, grade: Grade, today: date):
     state = ReviewState(
         repetitions=card_row["repetitions"],
@@ -170,6 +199,8 @@ def deck_stats(conn, today: date):
         """SELECT deck,
                   COUNT(*) AS total,
                   SUM(CASE WHEN due_date <= ? THEN 1 ELSE 0 END) AS due,
+                  SUM(CASE WHEN repetitions = 0 AND last_reviewed IS NOT NULL
+                           THEN 1 ELSE 0 END) AS missed,
                   MIN(CASE WHEN due_date > ? THEN due_date END) AS next_due
            FROM cards GROUP BY deck ORDER BY deck""",
         (today.isoformat(), today.isoformat()),

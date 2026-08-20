@@ -48,6 +48,7 @@ cp examples/spanish-basics.md decks/
 flashback sync       # load deck files into the review database
 flashback review     # review whatever's due
 flashback stats      # see totals per deck
+flashback hard       # see which cards you're actually struggling with
 ```
 
 `flashback sync` re-reads your deck files, so edit them freely — fix a
@@ -182,6 +183,46 @@ next card is due 2026-08-26 (in 6 days).
 `-` there means that deck has cards due right now rather than a date in
 the future. If you pass `--deck`, the next date reported is that deck's,
 not the whole collection's.
+
+## What you're bad at
+
+The whole pitch of spaced repetition is that the tool works out what you
+find hard and shows it to you more often. `flashback hard` says it out
+loud:
+
+```
+$ flashback hard
+1 card you missed at your last review:
+
+[astronomy]
+Q: What does a star's metallicity measure?
+   due tomorrow
+
+2 cards you've found hard before, but are getting right now:
+
+[astronomy]
+Q: What is the Chandrasekhar limit?
+   correct at your last 4 reviews; next review 2026-08-26
+[astronomy]
+Q: Which planet has the shortest day?
+   correct at your last 4 reviews; next review 2026-09-08
+```
+
+A card only appears here if your own grading has pushed its easiness below
+where every card starts — that is, if you've graded it `again` or `hard`
+more than you've graded it `easy`. If you haven't, `flashback hard` says
+so rather than ranking cards you're fine with.
+
+The two groups matter, and they're the reason this isn't just a sorted
+list. Easiness barely recovers once it falls (`good` doesn't raise it at
+all; `easy` adds 0.1), so a card you struggled with a month ago and have
+since got right four times running still scores exactly as badly as one
+you missed this morning. Ranking on easiness alone would put a card you've
+actually mastered at the top of a list headed "you're struggling with
+this." The first group is what to worry about now; the second is progress.
+
+`--deck` limits it to one deck. `--limit` caps how many cards each group
+shows (default 10, `0` for all); if it hides any, it says how many.
 
 This is a simplified version of SuperMemo's SM-2 algorithm (four grades
 instead of SM-2's original six, to keep review fast). The exact math is in

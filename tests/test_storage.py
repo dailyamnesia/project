@@ -10,6 +10,7 @@ from flashback.scheduler import Grade
 from flashback.storage import (
     SCHEMA,
     due_cards,
+    hard_cards,
     next_due_date,
     open_db,
     prune_missing_decks,
@@ -111,6 +112,67 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(next_due_date(conn, today, deck="geology"), date(2026, 1, 30))
             self.assertEqual(next_due_date(conn, today, deck="spanish"), date(2026, 1, 2))
             self.assertIsNone(next_due_date(conn, today, deck="nonexistent"))
+
+    def _graded(self, conn, today, deck, text, grades):
+        """Sync one deck and grade each card through a list of grades in order."""
+        sync_deck(conn, deck, parse_deck(text), today)
+        for question, sequence in grades.items():
+            for grade in sequence:
+                row = conn.execute(
+                    "SELECT * FROM cards WHERE deck = ? AND question = ?", (deck, question)
+                ).fetchone()
+                record_review(conn, row, grade, today)
+
+    def test_hard_cards_only_returns_cards_graded_down_from_the_default(self):
+        # DEFAULT_EASINESS is where every card starts and only `again`/`hard`
+        # move it down, so "below the default" is exactly "you got this wrong
+        # or found it hard at some point" — not an arbitrary cutoff.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            self._graded(
+                conn,
+                today,
+                "d",
+                "Q: missed\nA: 1\n---\nQ: fine\nA: 2\n---\nQ: never reviewed\nA: 3\n",
+                {"missed": [Grade.AGAIN], "fine": [Grade.GOOD, Grade.EASY]},
+            )
+            questions = [row["question"] for row in hard_cards(conn)]
+            self.assertEqual(questions, ["missed"])
+
+    def test_hard_cards_puts_a_currently_missed_card_above_an_older_harder_one(self):
+        # The heart of it: easiness barely recovers (`good` adds nothing, `easy`
+        # adds 0.1), so a card struggled with long ago and since mastered reads
+        # exactly as low as one missed this morning. Ranking on easiness alone
+        # would head the list with a card the learner has actually got.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            self._graded(
+                conn,
+                today,
+                "d",
+                "Q: recovered\nA: 1\n---\nQ: still missing\nA: 2\n",
+                {
+                    # Floored at MIN_EASINESS, then four correct reviews running.
+                    "recovered": [Grade.AGAIN, Grade.AGAIN, Grade.AGAIN]
+                    + [Grade.GOOD] * 4,
+                    # One `hard`: a *higher* easiness, but missed most recently.
+                    "still missing": [Grade.HARD, Grade.AGAIN],
+                },
+            )
+            rows = hard_cards(conn)
+            self.assertEqual([row["question"] for row in rows], ["still missing", "recovered"])
+            self.assertLess(rows[1]["easiness"], rows[0]["easiness"])
+            self.assertTrue(rows[0]["currently_missed"])
+            self.assertFalse(rows[1]["currently_missed"])
+
+    def test_hard_cards_respects_the_deck_filter(self):
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            self._graded(conn, today, "geology", "Q: a\nA: 1\n", {"a": [Grade.AGAIN]})
+            self._graded(conn, today, "spanish", "Q: b\nA: 2\n", {"b": [Grade.AGAIN]})
+            self.assertEqual([r["question"] for r in hard_cards(conn, deck="geology")], ["a"])
+            self.assertEqual([r["question"] for r in hard_cards(conn, deck="spanish")], ["b"])
+            self.assertEqual(hard_cards(conn, deck="nonexistent"), [])
 
     def test_prune_missing_decks_removes_cards_for_a_deck_no_longer_present(self):
         today = date(2026, 1, 1)

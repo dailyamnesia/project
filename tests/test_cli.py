@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 from flashback.cli import main
 from flashback.parser import parse_deck
-from flashback.storage import due_cards, open_db
+from flashback.scheduler import Grade
+from flashback.storage import due_cards, open_db, record_review
 from flashback.storage import sync_deck as real_sync_deck
 
 # Permission-based tests below don't mean anything as root, which ignores
@@ -817,6 +818,128 @@ class TestNextDueReporting(unittest.TestCase):
         self.assertIn((date.today() + timedelta(days=4)).isoformat(), geology)
         # spanish is due right now, so it has no *future* date to report.
         self.assertTrue(spanish.rstrip().endswith("-"), spanish)
+
+
+class TestHardCommand(unittest.TestCase):
+    """`hard` should tell a learner which cards they're actually bad at.
+
+    The scheduler has computed this since day one — easiness falls on every
+    `again`/`hard` grade, and the whole pitch of spaced repetition is that the
+    tool knows what you're struggling with. It just never had a way to say it.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
+
+    def run_flashback(self, *args):
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
+
+    def capture(self, *args):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = self.run_flashback(*args)
+        return rc, buf.getvalue()
+
+    def _grade(self, question, *grades):
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            for grade in grades:
+                row = conn.execute(
+                    "SELECT * FROM cards WHERE question = ?", (question,)
+                ).fetchone()
+                record_review(conn, row, grade, date.today())
+
+    def test_hard_lists_a_card_the_learner_keeps_missing(self):
+        self.run_flashback("add", "astro", "-q", "metallicity?", "-a", "not H or He")
+        self.run_flashback("add", "astro", "-q", "parsec?", "-a", "3.26ly")
+        self.run_flashback("sync")
+        self._grade("metallicity?", Grade.AGAIN, Grade.AGAIN)
+
+        rc, out = self.capture("hard")
+        self.assertEqual(rc, 0)
+        self.assertIn("metallicity?", out)
+        self.assertIn("missed at your last review", out)
+        # A card never graded down has no business on a list of what you're bad at.
+        self.assertNotIn("parsec?", out)
+
+    def test_hard_separates_a_recovered_card_from_one_missed_right_now(self):
+        # The finding this command was built around: easiness alone can't tell
+        # "missed this morning" from "struggled with weeks ago, fine now", so a
+        # single hardest-first list would head itself with a mastered card.
+        self.run_flashback("add", "astro", "-q", "chandrasekhar?", "-a", "1.4 Msun")
+        self.run_flashback("add", "astro", "-q", "metallicity?", "-a", "not H or He")
+        self.run_flashback("sync")
+        self._grade("chandrasekhar?", Grade.AGAIN, Grade.AGAIN, Grade.AGAIN, *[Grade.GOOD] * 4)
+        self._grade("metallicity?", Grade.HARD, Grade.AGAIN)
+
+        rc, out = self.capture("hard")
+        self.assertEqual(rc, 0)
+        missed_at = out.index("you missed at your last review")
+        recovering_at = out.index("you've found hard before")
+        self.assertLess(missed_at, recovering_at)
+        # Each card must land in the right section, not merely appear somewhere.
+        self.assertLess(out.index("metallicity?"), recovering_at)
+        self.assertGreater(out.index("chandrasekhar?"), recovering_at)
+        self.assertIn("correct at your last 4 reviews", out)
+
+    def test_hard_says_nothing_is_hard_rather_than_inventing_a_ranking(self):
+        self.run_flashback("add", "astro", "-q", "parsec?", "-a", "3.26ly")
+        self.run_flashback("sync")
+        self._grade("parsec?", Grade.GOOD, Grade.EASY)
+
+        rc, out = self.capture("hard")
+        self.assertEqual(rc, 0)
+        self.assertIn("nothing looks hard yet", out)
+        self.assertNotIn("parsec?", out)
+
+    def test_hard_with_no_decks_at_all_points_at_sync(self):
+        rc, out = self.capture("hard")
+        self.assertEqual(rc, 0)
+        self.assertIn("run `flashback sync`", out)
+
+    def test_hard_respects_the_deck_filter(self):
+        self.run_flashback("add", "astro", "-q", "metallicity?", "-a", "not H or He")
+        self.run_flashback("add", "french", "-q", "le fauteuil?", "-a", "armchair")
+        self.run_flashback("sync")
+        self._grade("metallicity?", Grade.AGAIN)
+        self._grade("le fauteuil?", Grade.AGAIN)
+
+        _, out = self.capture("hard", "--deck", "french")
+        self.assertIn("le fauteuil?", out)
+        self.assertNotIn("metallicity?", out)
+
+    def test_hard_announces_what_the_limit_hides_instead_of_truncating_silently(self):
+        for n in range(4):
+            self.run_flashback("add", "astro", "-q", f"q{n}?", "-a", str(n))
+        self.run_flashback("sync")
+        for n in range(4):
+            self._grade(f"q{n}?", Grade.AGAIN)
+
+        _, out = self.capture("hard", "--limit", "2")
+        self.assertIn("and 2 more", out)
+        _, all_out = self.capture("hard", "--limit", "0")
+        self.assertNotIn("more (raise --limit", all_out)
+        for n in range(4):
+            self.assertIn(f"q{n}?", all_out)
+
+    def test_stats_counts_the_cards_currently_being_missed(self):
+        # Without this the new command is undiscoverable: nothing else in the
+        # tool would ever hint that it has something to say.
+        self.run_flashback("add", "astro", "-q", "metallicity?", "-a", "not H or He")
+        self.run_flashback("add", "astro", "-q", "parsec?", "-a", "3.26ly")
+        self.run_flashback("sync")
+        self._grade("metallicity?", Grade.AGAIN)
+        self._grade("parsec?", Grade.GOOD)
+
+        rc, out = self.capture("stats")
+        self.assertEqual(rc, 0)
+        self.assertIn("missed", out.splitlines()[0])
+        astro = next(line for line in out.splitlines() if line.startswith("astro"))
+        self.assertEqual(astro.split()[1:4], ["2", "0", "1"])
 
 
 if __name__ == "__main__":
