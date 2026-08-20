@@ -4,7 +4,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import redirect_stdout
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -718,6 +718,105 @@ class TestStateDirAccessErrors(unittest.TestCase):
 
         rc = self.run_flashback("add", "newdeck", "-q", "q?", "-a", "a")
         self.assertEqual(rc, 1)
+
+
+class TestNextDueReporting(unittest.TestCase):
+    """`due`/`review`/`stats` should say when the next card actually comes back.
+
+    Every card's `due_date` has always been in the database; before this, a
+    person who caught up left with "nothing due. go outside." and no idea
+    whether that meant tomorrow or next month.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
+
+    def run_flashback(self, *args):
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
+
+    def capture(self, *args):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = self.run_flashback(*args)
+        return rc, buf.getvalue()
+
+    def _set_due(self, due, deck=None):
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            if deck is None:
+                conn.execute("UPDATE cards SET due_date = ?", (due,))
+            else:
+                conn.execute("UPDATE cards SET due_date = ? WHERE deck = ?", (due, deck))
+
+    def test_due_reports_the_next_due_date_when_nothing_is_due(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+        self._set_due((date.today() + timedelta(days=6)).isoformat())
+
+        rc, out = self.capture("due")
+        self.assertEqual(rc, 0)
+        self.assertIn("nothing due", out)
+        self.assertIn((date.today() + timedelta(days=6)).isoformat(), out)
+        self.assertIn("in 6 days", out)
+
+    def test_due_says_tomorrow_rather_than_in_1_days(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+        self._set_due((date.today() + timedelta(days=1)).isoformat())
+
+        _, out = self.capture("due")
+        self.assertIn("tomorrow", out)
+        self.assertNotIn("in 1 days", out)
+
+    def test_review_reports_the_same_next_due_date_as_due(self):
+        # `due` and `review` print the identical "nothing due" message; if only
+        # one of them learned to say when to come back, the two would drift.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+        self._set_due((date.today() + timedelta(days=3)).isoformat())
+
+        _, due_out = self.capture("due")
+        _, review_out = self.capture("review")
+        self.assertEqual(due_out, review_out)
+        self.assertIn("in 3 days", review_out)
+
+    def test_next_due_date_respects_the_deck_filter(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("add", "geology", "-q", "batholith?", "-a", "big rock")
+        self.run_flashback("sync")
+        self._set_due((date.today() + timedelta(days=2)).isoformat(), deck="spanish")
+        self._set_due((date.today() + timedelta(days=9)).isoformat(), deck="geology")
+
+        _, out = self.capture("due", "--deck", "geology")
+        self.assertIn("in 9 days", out)
+        self.assertNotIn("in 2 days", out)
+
+    def test_nothing_due_with_no_cards_at_all_says_nothing_about_a_next_date(self):
+        # An empty database has no honest answer here — better to stay quiet
+        # than to invent one.
+        rc, out = self.capture("due")
+        self.assertEqual(rc, 0)
+        self.assertIn("nothing due", out)
+        self.assertNotIn("next card is due", out)
+
+    def test_stats_shows_each_decks_next_due_date(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("add", "geology", "-q", "batholith?", "-a", "big rock")
+        self.run_flashback("sync")
+        self._set_due((date.today() + timedelta(days=4)).isoformat(), deck="geology")
+
+        rc, out = self.capture("stats")
+        self.assertEqual(rc, 0)
+        self.assertIn("next", out.splitlines()[0])
+        geology = next(line for line in out.splitlines() if line.startswith("geology"))
+        spanish = next(line for line in out.splitlines() if line.startswith("spanish"))
+        self.assertIn((date.today() + timedelta(days=4)).isoformat(), geology)
+        # spanish is due right now, so it has no *future* date to report.
+        self.assertTrue(spanish.rstrip().endswith("-"), spanish)
 
 
 if __name__ == "__main__":

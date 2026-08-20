@@ -13,7 +13,15 @@ from typing import Optional
 from . import __version__
 from .parser import BIDI_FORMATTING_CLASSES, ParseError, append_card, edit_card, parse_deck, remove_card
 from .scheduler import Grade
-from .storage import deck_stats, due_cards, open_db, prune_missing_decks, record_review, sync_deck
+from .storage import (
+    deck_stats,
+    due_cards,
+    next_due_date,
+    open_db,
+    prune_missing_decks,
+    record_review,
+    sync_deck,
+)
 
 try:
     import fcntl
@@ -325,13 +333,29 @@ def cmd_edit(args):
     return 0
 
 
+def _print_nothing_due(conn, today, deck):
+    """The 'nothing due' message, plus when the next card actually comes back.
+
+    Shared by `due` and `review` so the two can't drift: both are answering the
+    same question, and "nothing due" on its own leaves the reader guessing
+    whether to check again tomorrow or in a month.
+    """
+    print("nothing due. go outside.")
+    next_due = next_due_date(conn, today, deck)
+    if next_due is None:
+        return
+    days = (next_due - today).days
+    when = "tomorrow" if days == 1 else f"in {days} days"
+    print(f"next card is due {next_due.isoformat()} ({when}).")
+
+
 def cmd_due(args):
     today = date.today()
     with open_db(_db_path(args)) as conn:
         rows = due_cards(conn, today, args.deck)
-    if not rows:
-        print("nothing due. go outside.")
-        return 0
+        if not rows:
+            _print_nothing_due(conn, today, args.deck)
+            return 0
     by_deck = {}
     for row in rows:
         by_deck[row["deck"]] = by_deck.get(row["deck"], 0) + 1
@@ -347,9 +371,9 @@ def cmd_stats(args):
     if not rows:
         print("no decks yet. run `flashback sync` first.")
         return 0
-    print(f"{'deck':<20} {'total':>6} {'due':>6}")
+    print(f"{'deck':<20} {'total':>6} {'due':>6}  next")
     for row in rows:
-        print(f"{row['deck']:<20} {row['total']:>6} {row['due'] or 0:>6}")
+        print(f"{row['deck']:<20} {row['total']:>6} {row['due'] or 0:>6}  {row['next_due'] or '-'}")
     return 0
 
 
@@ -358,7 +382,7 @@ def cmd_review(args):
     with open_db(_db_path(args)) as conn:
         rows = due_cards(conn, today, args.deck)
         if not rows:
-            print("nothing due. go outside.")
+            _print_nothing_due(conn, today, args.deck)
             return 0
 
         print(f"{len(rows)} card(s) due. (again=1, hard=2, good=3, easy=4, q=quit)\n")

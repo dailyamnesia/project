@@ -169,6 +169,20 @@ and those numbers update:
   streak of easy reviews can't push a card's next review date out far
   enough to break normal date arithmetic.
 
+When there's nothing left to review, `flashback due` and `flashback review`
+both tell you when the next card is actually scheduled:
+
+```
+$ flashback due
+nothing due. go outside.
+next card is due 2026-08-26 (in 6 days).
+```
+
+`flashback stats` shows the same thing per deck, in a `next` column — a
+`-` there means that deck has cards due right now rather than a date in
+the future. If you pass `--deck`, the next date reported is that deck's,
+not the whole collection's.
+
 This is a simplified version of SuperMemo's SM-2 algorithm (four grades
 instead of SM-2's original six, to keep review fast). The exact math is in
 [`flashback/scheduler.py`](flashback/scheduler.py), and its behavior is

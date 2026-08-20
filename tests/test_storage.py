@@ -7,7 +7,15 @@ from pathlib import Path
 
 from flashback.parser import parse_deck
 from flashback.scheduler import Grade
-from flashback.storage import SCHEMA, due_cards, open_db, prune_missing_decks, record_review, sync_deck
+from flashback.storage import (
+    SCHEMA,
+    due_cards,
+    next_due_date,
+    open_db,
+    prune_missing_decks,
+    record_review,
+    sync_deck,
+)
 
 
 class TestStorage(unittest.TestCase):
@@ -69,6 +77,40 @@ class TestStorage(unittest.TestCase):
             sync_deck(conn, "geography", parse_deck("Q: capital?\nA: Paris\n"), today)
             self.assertEqual(len(due_cards(conn, today, deck="")), 0)
             self.assertEqual(len(due_cards(conn, today, deck=None)), 1)
+
+    def test_next_due_date_returns_the_earliest_future_due_date(self):
+        # The whole point is answering "when should I come back?" — so it has to
+        # skip anything already due (that's `due_cards`' job) and pick the
+        # soonest card still ahead of today, not just any future card.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "d", parse_deck("Q: a\nA: 1\n---\nQ: b\nA: 2\n---\nQ: c\nA: 3\n"), today)
+            rows = {r["question"]: r for r in due_cards(conn, today)}
+            conn.execute("UPDATE cards SET due_date = ? WHERE id = ?", ("2026-01-20", rows["a"]["id"]))
+            conn.execute("UPDATE cards SET due_date = ? WHERE id = ?", ("2026-01-05", rows["b"]["id"]))
+            # "c" stays due today, so it must not be what gets reported.
+            self.assertEqual(next_due_date(conn, today), date(2026, 1, 5))
+
+    def test_next_due_date_is_none_when_nothing_is_scheduled_later(self):
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            self.assertIsNone(next_due_date(conn, today))
+            sync_deck(conn, "d", parse_deck("Q: a\nA: 1\n"), today)
+            # One card, due today — there is no *next* date to report yet.
+            self.assertIsNone(next_due_date(conn, today))
+
+    def test_next_due_date_respects_the_deck_filter(self):
+        # `due --deck geology` reporting spanish's next date would be worse than
+        # saying nothing: it's a confident answer to a question nobody asked.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "geology", parse_deck("Q: a\nA: 1\n"), today)
+            sync_deck(conn, "spanish", parse_deck("Q: b\nA: 2\n"), today)
+            conn.execute("UPDATE cards SET due_date = ? WHERE deck = ?", ("2026-01-30", "geology"))
+            conn.execute("UPDATE cards SET due_date = ? WHERE deck = ?", ("2026-01-02", "spanish"))
+            self.assertEqual(next_due_date(conn, today, deck="geology"), date(2026, 1, 30))
+            self.assertEqual(next_due_date(conn, today, deck="spanish"), date(2026, 1, 2))
+            self.assertIsNone(next_due_date(conn, today, deck="nonexistent"))
 
     def test_prune_missing_decks_removes_cards_for_a_deck_no_longer_present(self):
         today = date(2026, 1, 1)

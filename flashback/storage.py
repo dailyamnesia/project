@@ -99,6 +99,24 @@ def due_cards(conn, today: date, deck: str = None):
     return conn.execute(query, params).fetchall()
 
 
+def next_due_date(conn, today: date, deck: str = None):
+    """Earliest due date strictly after `today`, or None if nothing is scheduled later.
+
+    `due_cards` answers "what can I review right now". This answers the question
+    that follows immediately whenever that answer is "nothing": when to come back.
+    Every card already carries its own `due_date`, so the tool has always known
+    this — it just never had a way to say it.
+    """
+    query = "SELECT MIN(due_date) FROM cards WHERE due_date > ?"
+    params = [today.isoformat()]
+    if deck is not None:
+        query += " AND deck = ?"
+        params.append(deck)
+    row = conn.execute(query, params).fetchone()
+    value = row[0] if row is not None else None
+    return date.fromisoformat(value) if value else None
+
+
 def record_review(conn, card_row, grade: Grade, today: date):
     state = ReviewState(
         repetitions=card_row["repetitions"],
@@ -151,7 +169,8 @@ def deck_stats(conn, today: date):
     return conn.execute(
         """SELECT deck,
                   COUNT(*) AS total,
-                  SUM(CASE WHEN due_date <= ? THEN 1 ELSE 0 END) AS due
+                  SUM(CASE WHEN due_date <= ? THEN 1 ELSE 0 END) AS due,
+                  MIN(CASE WHEN due_date > ? THEN due_date END) AS next_due
            FROM cards GROUP BY deck ORDER BY deck""",
-        (today.isoformat(),),
+        (today.isoformat(), today.isoformat()),
     ).fetchall()
