@@ -127,13 +127,26 @@ def hard_cards(conn, deck: str = None):
 
     Ordered worst-first, but "worst" deliberately leads with `currently_missed`
     rather than with easiness alone. Easiness only ever creeps back up (+0.1 at
-    best, and never past MIN_EASINESS's floor in a hurry), so a card you
-    struggled with weeks ago and have since gotten right four times running
-    still reads exactly as low as one you missed this morning. Sorting on
-    easiness alone would put a card you've actually mastered at the top of a
-    list headed "you're struggling with this" — a confident wrong answer, which
-    is worse than not answering. `repetitions` resets to 0 on any failed
-    recall, so it's the part of the stored state that tracks *lately*.
+    best, and never past MIN_EASINESS's floor in a hurry) — `good` leaves it
+    untouched entirely — so a card graded `good` for months after one long-ago
+    slip reads exactly as low as one missed this morning, forever: nothing
+    about later `good` reviews ever moves the number that decides inclusion or
+    rank.
+
+    Within a group, `interval_days` — not easiness — breaks the tie: it's the
+    scheduler's own current confidence, shrinking the moment a card is missed
+    and growing every time it's confirmed since, so it tracks "still uncertain
+    about this one" far better than a floor easiness can't leave once it's hit
+    it. A card the scheduler already trusts for another decade sorts behind
+    one it plans to re-check in a week, even if the decade-out card's easiness
+    happens to read lower — a real case (session 68): one old slip followed by
+    many `good` reviews leaves a card mastered by every measure but easiness
+    outranking one still being graded `hard` every few days, because easiness
+    alone can't tell "recovered long ago" from "still shaky right now".
+    Easiness remains the second-level tiebreak for cards the scheduler is
+    equally unsure about, and `repetitions` (resets to 0 on any failed recall,
+    so it's the part of the stored state that tracks *lately*) breaks further
+    ties.
     """
     query = """SELECT *, (repetitions = 0) AS currently_missed
                FROM cards
@@ -142,7 +155,8 @@ def hard_cards(conn, deck: str = None):
     if deck is not None:
         query += " AND deck = ?"
         params.append(deck)
-    query += " ORDER BY currently_missed DESC, easiness ASC, repetitions ASC, question ASC"
+    query += """ ORDER BY currently_missed DESC, interval_days ASC, easiness ASC,
+                 repetitions ASC, question ASC"""
     return conn.execute(query, params).fetchall()
 
 

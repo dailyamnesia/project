@@ -165,6 +165,39 @@ class TestStorage(unittest.TestCase):
             self.assertTrue(rows[0]["currently_missed"])
             self.assertFalse(rows[1]["currently_missed"])
 
+    def test_hard_cards_ranks_by_scheduler_confidence_not_stale_easiness(self):
+        # `good` never moves easiness at all, so a card slipped once and then
+        # gotten right five times running in a row still carries the same low
+        # easiness as a card only ever graded `hard` twice — even though the
+        # scheduler itself is far more confident about the first (a much
+        # longer interval_days) than the second. Ranking on easiness alone
+        # would put the mastered card above the one still being graded
+        # `hard` every few days — the exact "confident wrong answer" failure
+        # this function's docstring already warns easiness-only sorting
+        # produces, just reached through interval_days instead of
+        # currently_missed.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            self._graded(
+                conn,
+                today,
+                "d",
+                "Q: mastered after one slip\nA: 1\n---\nQ: still hard right now\nA: 2\n",
+                {
+                    "mastered after one slip": [Grade.AGAIN] + [Grade.GOOD] * 5,
+                    "still hard right now": [Grade.HARD, Grade.HARD],
+                },
+            )
+            rows = hard_cards(conn)
+            self.assertEqual(
+                [row["question"] for row in rows],
+                ["still hard right now", "mastered after one slip"],
+            )
+            self.assertLess(rows[0]["interval_days"], rows[1]["interval_days"])
+            # The easiness ordering runs the *other* way — confirming this
+            # is genuinely interval_days doing the work, not a coincidence.
+            self.assertGreater(rows[0]["easiness"], rows[1]["easiness"])
+
     def test_hard_cards_respects_the_deck_filter(self):
         today = date(2026, 1, 1)
         with open_db(self.db_path) as conn:

@@ -221,6 +221,14 @@ you missed this morning. Ranking on easiness alone would put a card you've
 actually mastered at the top of a list headed "you're struggling with
 this." The first group is what to worry about now; the second is progress.
 
+Within the second group, cards aren't ranked by that same stuck easiness
+either — a card graded `good` for months after one old slip would sit at
+the top forever, since nothing about later `good` reviews ever moves it.
+They're ranked by how soon the scheduler itself plans to check on each one
+again: a card still being graded `hard` every few days ranks above one it's
+already trusted for years, regardless of which one's easiness number reads
+lower.
+
 `--deck` limits it to one deck. `--limit` caps how many cards each group
 shows (default 10, `0` for all); if it hides any, it says how many.
 
