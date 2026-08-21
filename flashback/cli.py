@@ -11,7 +11,15 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__
-from .parser import BIDI_FORMATTING_CLASSES, ParseError, append_card, edit_card, parse_deck, remove_card
+from .parser import (
+    BIDI_FORMATTING_CLASSES,
+    ParseError,
+    _check_card_text,
+    append_card,
+    edit_card,
+    parse_deck,
+    remove_card,
+)
 from .scheduler import Grade
 from .storage import (
     deck_stats,
@@ -307,6 +315,16 @@ def cmd_edit(args):
     new_question = args.new_question
     new_answer = args.new_answer
     if new_question is None and new_answer is None:
+        # The matched card's own text is about to be printed straight to the
+        # terminal below — the same risk _check_card_text guards against for
+        # sync/review, and the reason this deliberately doesn't use the
+        # validate=False lookup above for this specific card, even though
+        # that lookup is correct for every *other* card in the deck.
+        try:
+            _check_card_text(match.question, match.answer)
+        except ParseError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         print(f"current Q: {match.question}")
         new_question = input("new Q (blank to keep): ").strip() or None
         print(f"current A: {match.answer}")

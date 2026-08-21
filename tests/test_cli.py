@@ -382,6 +382,32 @@ class TestEditCommand(unittest.TestCase):
         cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
         self.assertEqual(cards[0].answer, "hola!")
 
+    def test_interactive_preview_refuses_to_print_the_matched_cards_own_poisoned_text(self):
+        # The previous test confirms an *unrelated* poisoned card doesn't
+        # block editing this one — that's the validate=False lookup working
+        # as intended. This is the opposite case: the poison is on the card
+        # actually being edited, and interactive edit (no --new-question/
+        # --new-answer) prints "current Q"/"current A" straight to the
+        # terminal before prompting. Without its own _check_card_text call,
+        # that print bypasses the exact protection sync/review enforce for
+        # every other card, and a control character in the answer (e.g. ESC,
+        # or here BEL) would reach the terminal raw.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        deck_path = self.decks_dir / "spanish.md"
+        deck_path.write_text("Q: hello?\nA: bad\x07answer\n", encoding="utf-8")
+
+        out = io.StringIO()
+        with patch("builtins.input", side_effect=AssertionError("should not prompt")), redirect_stdout(
+            out
+        ):
+            rc = self.run_flashback("edit", "spanish", "-q", "hello?")
+        self.assertEqual(rc, 1)
+        self.assertNotIn("\x07", out.getvalue())
+        self.assertNotIn("current A", out.getvalue())
+
+        # refused before any write, so the poisoned text is untouched on disk
+        self.assertEqual(deck_path.read_text(encoding="utf-8"), "Q: hello?\nA: bad\x07answer\n")
+
     def test_write_failure_does_not_destroy_the_deck_files_existing_cards(self):
         # Same reasoning as add's equivalent test: a write failure mid-`edit`
         # used to truncate the whole deck file, deleting every card it held —
