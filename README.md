@@ -209,9 +209,11 @@ Q: Which planet has the shortest day?
 ```
 
 A card only appears here if your own grading has pushed its easiness below
-where every card starts — that is, if you've graded it `again` or `hard`
-more than you've graded it `easy`. If you haven't, `flashback hard` says
-so rather than ranking cards you're fine with.
+where every card starts. That's not a simple tally of grades either way —
+`again` (-0.8) and `hard` (-0.14) move easiness down far more than `easy`
+(+0.1) moves it back up, so a single `hard` isn't undone by a single `easy`;
+it takes two. If your grading hasn't pushed a card below its starting
+point, `flashback hard` says so rather than ranking cards you're fine with.
 
 The two groups matter, and they're the reason this isn't just a sorted
 list. Easiness barely recovers once it falls (`good` doesn't raise it at
