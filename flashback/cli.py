@@ -416,8 +416,9 @@ def cmd_hard(args):
         print("no decks yet. run `flashback sync` first.")
         return 0
     if not rows:
-        print("nothing looks hard yet — no card has been graded `again` or `hard`")
-        print("more than it's been graded `easy`.")
+        print("nothing looks hard yet — no card's easiness has dropped below where")
+        print("it started (`again`/`hard` move it down far more than `easy` moves")
+        print("it back up, so it's not a simple tally of grades either way).")
         return 0
 
     # Two groups, not one ranked list. Easiness alone can't tell "missed this
