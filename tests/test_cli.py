@@ -183,6 +183,21 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
 
+    def test_non_utf8_existing_deck_file_fails_cleanly_instead_of_a_raw_traceback(self):
+        # `sync` already skips a deck file that isn't valid UTF-8 instead of
+        # crashing (session 47) — but `add` reads the *specific* deck file it
+        # was told to add to with a plain Path.read_text and no such guard,
+        # and UnicodeDecodeError is a ValueError subclass main()'s existing
+        # OSError/sqlite3.Error handlers don't catch either. Adding a card to
+        # an existing, corrupted deck used to crash with a raw traceback
+        # exposing local paths instead of the clean "error: ..." shape every
+        # other failure in this file gets.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "spanish.md").write_bytes(b"Q: caf\xe9?\nA: coffee\n")
+
+        rc = self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.assertEqual(rc, 1)
+
     @unittest.skipIf(os.name == "nt", "the lock this guards against is POSIX-only (fcntl)")
     def test_concurrent_adds_to_the_same_deck_do_not_lose_cards(self):
         # Regression test for a real race: two `add`s to the same deck each
@@ -277,6 +292,16 @@ class TestRemoveCommand(unittest.TestCase):
 
         cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
         self.assertEqual([c.question for c in cards], ["bad"])
+
+    def test_non_utf8_deck_file_fails_cleanly_instead_of_a_raw_traceback(self):
+        # Same reasoning as add's equivalent test: `remove` reads the
+        # specific deck file it was told to touch with a plain
+        # Path.read_text and no UnicodeDecodeError guard, unlike `sync`.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "spanish.md").write_bytes(b"Q: caf\xe9?\nA: coffee\n")
+
+        rc = self.run_flashback("remove", "spanish", "-q", "hello?")
+        self.assertEqual(rc, 1)
 
     def test_write_failure_does_not_destroy_the_deck_files_existing_cards(self):
         # Same reasoning as add's equivalent test: a write failure mid-`remove`
@@ -407,6 +432,16 @@ class TestEditCommand(unittest.TestCase):
 
         # refused before any write, so the poisoned text is untouched on disk
         self.assertEqual(deck_path.read_text(encoding="utf-8"), "Q: hello?\nA: bad\x07answer\n")
+
+    def test_non_utf8_deck_file_fails_cleanly_instead_of_a_raw_traceback(self):
+        # Same reasoning as add's equivalent test: `edit`'s preview read (and
+        # its later re-read inside the lock) both used a plain Path.read_text
+        # with no UnicodeDecodeError guard, unlike `sync`.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "spanish.md").write_bytes(b"Q: caf\xe9?\nA: coffee\n")
+
+        rc = self.run_flashback("edit", "spanish", "-q", "hello?", "--new-answer", "hola!")
+        self.assertEqual(rc, 1)
 
     def test_write_failure_does_not_destroy_the_deck_files_existing_cards(self):
         # Same reasoning as add's equivalent test: a write failure mid-`edit`

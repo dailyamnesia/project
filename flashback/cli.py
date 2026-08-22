@@ -166,6 +166,25 @@ def _deck_lock(lock_path: Path):
         os.close(fd)
 
 
+def _read_deck_text(deck_path: Path) -> str:
+    """Read a deck file as UTF-8, raising ParseError (not UnicodeDecodeError) on bad bytes.
+
+    `cmd_sync` already skips a deck file that isn't valid UTF-8 instead of crashing the
+    whole run (session 47) — but add/remove/edit each read one *specific* deck file the
+    user named, where "skip it and continue" isn't an option, and they called
+    `Path.read_text` directly with no such guard. `UnicodeDecodeError` is a `ValueError`
+    subclass, not an `OSError`, so it isn't caught by main()'s existing OSError handler
+    either: a corrupted or hand-mis-encoded deck file crashed add/remove/edit with a raw
+    traceback exposing local paths, unlike every other user-facing failure in this file.
+    Raising ParseError here lets every call site reuse the `except ParseError` handling
+    it already has, instead of adding a second, separate except clause at each one.
+    """
+    try:
+        return deck_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ParseError(f"{deck_path} is not valid UTF-8 ({exc})") from exc
+
+
 def cmd_sync(args):
     decks_dir = Path(args.decks_dir)
     if not decks_dir.is_dir():
@@ -241,8 +260,8 @@ def cmd_add(args):
     answer = args.answer if args.answer is not None else input("A: ")
 
     with _deck_lock(_deck_lock_path(args, args.deck)):
-        existing_text = deck_path.read_text(encoding="utf-8") if deck_path.exists() else ""
         try:
+            existing_text = _read_deck_text(deck_path) if deck_path.exists() else ""
             new_text = append_card(existing_text, question, answer)
         except ParseError as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -268,8 +287,8 @@ def cmd_remove(args):
     question = args.question if args.question is not None else input("Q: ")
 
     with _deck_lock(_deck_lock_path(args, args.deck)):
-        existing_text = deck_path.read_text(encoding="utf-8")
         try:
+            existing_text = _read_deck_text(deck_path)
             new_text = remove_card(existing_text, question)
         except ParseError as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -297,8 +316,8 @@ def cmd_edit(args):
 
     question = (args.question if args.question is not None else input("Q: ")).strip()
 
-    preview_text = deck_path.read_text(encoding="utf-8")
     try:
+        preview_text = _read_deck_text(deck_path)
         # validate=False: this is just a lookup to show the card's current
         # text before prompting — it shouldn't be blocked by some other,
         # unrelated card in the same deck failing _check_card_text.
@@ -340,8 +359,8 @@ def cmd_edit(args):
     # must act on the current on-disk content, not a stale snapshot from
     # before the prompts.
     with _deck_lock(_deck_lock_path(args, args.deck)):
-        existing_text = deck_path.read_text(encoding="utf-8")
         try:
+            existing_text = _read_deck_text(deck_path)
             new_text = edit_card(existing_text, question, new_question=new_question, new_answer=new_answer)
         except ParseError as exc:
             print(f"error: {exc}", file=sys.stderr)
