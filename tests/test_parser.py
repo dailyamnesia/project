@@ -39,6 +39,17 @@ class TestParser(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_deck("A: answer with no question")
 
+    def test_text_before_the_first_q_marker_raises_instead_of_being_dropped(self):
+        # Deck files are meant to be hand-edited, and a stray line above a
+        # card's "Q:" (e.g. a misplaced question, forgotten to be prefixed)
+        # used to be silently discarded — `sync` reported full success with
+        # no warning, and the line was gone from both the deck file and the
+        # database with no trace. Raising here, the same way an embedded
+        # "Q:"/"A:" line inside a field already does, turns that into an
+        # error naming the actual lost text instead of quietly eating it.
+        with self.assertRaises(ParseError):
+            parse_deck("What is the capital of France?\nQ: (trick question)\nA: Paris\n")
+
     def test_duplicate_question_in_same_deck_raises(self):
         text = "Q: hola\nA: hi\n---\nQ: hola\nA: hello (again)\n"
         with self.assertRaises(ParseError):

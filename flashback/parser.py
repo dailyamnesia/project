@@ -101,7 +101,20 @@ def _parse_card(block: str) -> Card:
             question_lines.append(line)
         elif section == "a":
             answer_lines.append(line)
-        # lines before the first Q:/A: marker are ignored
+        elif line.strip():
+            # A non-blank line before the first Q:/A: marker used to be
+            # silently discarded here with no error and no trace in sync's
+            # success output — the exact "silently corrupts" failure shape
+            # this module's own docstring says add/edit exist to prevent,
+            # just reached through a different door (a hand-edited deck
+            # file with a stray line above a card's "Q:", not inside one).
+            # `parse_deck` always strips each block before calling this, so
+            # a genuinely blank line can never reach here — only real,
+            # about-to-be-lost content can.
+            raise ParseError(
+                f"card has text before its first 'Q:' line, which would be silently "
+                f"discarded ({line!r}):\n{block}"
+            )
 
     question = "\n".join(question_lines).strip()
     answer = "\n".join(answer_lines).strip()
