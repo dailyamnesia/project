@@ -272,10 +272,13 @@ only the deck in progress at the moment of interruption is left for the
 next `sync` to pick up.
 
 If a card gets removed (by `remove` + `sync`, possibly from another
-terminal) after `review` has already shown it but before you grade it,
-`review` prints `card no longer exists, skipped` instead of a `next
-review: ...` date — grading a card that isn't in the database anymore
-can't actually be saved, so it doesn't claim otherwise.
+terminal) after `review` has already shown it but before you grade it, or
+if another `review` session (another terminal, another person sharing this
+state dir) grades that same card first, `review` prints `card changed or
+no longer exists elsewhere, skipped` instead of a `next review: ...` date
+— either way, this grade can't actually be saved without silently
+overwriting whatever already happened to the card, so it doesn't claim
+otherwise.
 
 ## Development
 

@@ -513,17 +513,35 @@ def cmd_review(args):
             # review: ..." as if they were saved.
             conn.commit()
             if due is None:
-                # The card was removed (e.g. by `remove` + `sync` in another
-                # invocation) between being shown and being graded — nothing
-                # was saved, so don't claim a next-review date that never
-                # happened.
-                print("  card no longer exists, skipped\n")
+                # Either the card was removed (e.g. by `remove` + `sync` in
+                # another invocation) between being shown and being graded, or
+                # another concurrent `review` session graded this same card
+                # first (see record_review's optimistic-concurrency check) —
+                # either way nothing from this grade was saved, so don't claim
+                # a next-review date that never happened.
+                print("  card changed or no longer exists elsewhere, skipped\n")
                 continue
             print(f"  next review: {due.isoformat()}\n")
             reviewed += 1
 
         print(f"done. reviewed {reviewed} card(s).")
     return 0
+
+
+def _non_negative_int(value: str) -> int:
+    """argparse `type=` for `--limit`: reject negative counts instead of silently treating them as "show all".
+
+    `_print_hard_group` only special-cases `limit > 0` versus everything
+    else, so without this, `--limit -1` (a typo for a small positive number,
+    or a mistaken guess that negative means "not limited") would fall
+    through to the same "show every row" behavior as the documented `0`,
+    with no error — a silent divergence between what was typed and what
+    happened, for a flag whose whole job is to cap how much gets printed.
+    """
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be 0 or a positive integer, got {value!r}")
+    return parsed
 
 
 def build_parser():
@@ -580,7 +598,7 @@ def build_parser():
     p_hard.add_argument("--deck", help="limit to a single deck")
     p_hard.add_argument(
         "--limit",
-        type=int,
+        type=_non_negative_int,
         default=10,
         help="most cards to show per group (default: 10; 0 for all)",
     )

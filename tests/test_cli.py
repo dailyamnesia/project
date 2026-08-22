@@ -3,7 +3,7 @@ import os
 import tempfile
 import threading
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -698,7 +698,7 @@ class TestReviewCommand(unittest.TestCase):
         self.assertEqual(rc, 0)
 
         output = out.getvalue()
-        self.assertIn("card no longer exists, skipped", output)
+        self.assertIn("card changed or no longer exists elsewhere, skipped", output)
         self.assertNotIn("next review", output.split("two?")[1])
         self.assertEqual(output.count("next review"), 1)
 
@@ -961,6 +961,20 @@ class TestHardCommand(unittest.TestCase):
         self.assertNotIn("more (raise --limit", all_out)
         for n in range(4):
             self.assertIn(f"q{n}?", all_out)
+
+    def test_hard_rejects_a_negative_limit_instead_of_silently_showing_everything(self):
+        # `_print_hard_group` only special-cases `limit > 0` vs. everything
+        # else, so a negative value (a typo, or a guess that negative means
+        # "unlimited") would otherwise fall through to the same "show every
+        # row" behavior as the documented `0`, with no indication anything
+        # unusual happened — the opposite of what someone asking to *cap* the
+        # output would expect from a negative number.
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                self.run_flashback("hard", "--limit", "-5")
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("--limit", stderr.getvalue())
 
     def test_stats_counts_the_cards_currently_being_missed(self):
         # Without this the new command is undiscoverable: nothing else in the

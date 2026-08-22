@@ -182,6 +182,29 @@ def hard_cards(conn, deck: str = None):
 
 
 def record_review(conn, card_row, grade: Grade, today: date):
+    """Apply a grade to `card_row` and persist the result; return the new due date.
+
+    `card_row` was fetched earlier (by `due_cards`, at the start of a `review`
+    session) and grading happens later, after the person reads the question,
+    reveals the answer, and thinks about it — an interval with no upper bound
+    on how long it can run. If a second `review` session (another terminal,
+    another person sharing this state dir) grades the *same* card in that
+    window, its UPDATE has already moved `repetitions`/`interval_days`/
+    `easiness` on from what `card_row` remembers. Writing this review's result
+    with a plain `WHERE id = ?` would still match — the row still exists — and
+    would silently overwrite the other session's already-saved grade with one
+    computed from stale numbers, while both sessions print a confident "next
+    review: ..." as if each were the only one that happened. That's the same
+    shape of lost update `_deck_lock` prevents for concurrent add/remove/edit,
+    just one layer down, in the database rather than the file.
+
+    The `WHERE` clause below also requires the three fields grading actually
+    reads from (`repetitions`, `interval_days`, `easiness`) to still match what
+    `card_row` saw; if another process already moved them, this UPDATE matches
+    zero rows, same observable outcome as the card having been deleted
+    entirely — the caller already treats a zero-rowcount UPDATE as "nothing to
+    report as saved" for that reason.
+    """
     state = ReviewState(
         repetitions=card_row["repetitions"],
         interval_days=card_row["interval_days"],
@@ -192,7 +215,7 @@ def record_review(conn, card_row, grade: Grade, today: date):
     cursor = conn.execute(
         """UPDATE cards
            SET repetitions = ?, interval_days = ?, easiness = ?, due_date = ?, last_reviewed = ?
-           WHERE id = ?""",
+           WHERE id = ? AND repetitions = ? AND interval_days = ? AND easiness = ?""",
         (
             new_state.repetitions,
             new_state.interval_days,
@@ -200,6 +223,9 @@ def record_review(conn, card_row, grade: Grade, today: date):
             due.isoformat(),
             today.isoformat(),
             card_row["id"],
+            card_row["repetitions"],
+            card_row["interval_days"],
+            card_row["easiness"],
         ),
     )
     if cursor.rowcount == 0:

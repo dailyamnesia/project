@@ -332,6 +332,41 @@ class TestStorage(unittest.TestCase):
             due = record_review(conn, row, Grade.GOOD, today)
             self.assertIsNone(due)
 
+    def test_record_review_does_not_clobber_a_concurrent_review_of_the_same_card(self):
+        # Two `review` sessions (two terminals, or two people sharing a state
+        # dir) can both fetch the same due card before either grades it —
+        # grading happens after a person reads the question and thinks about
+        # it, an arbitrarily long window. If the second session's UPDATE were
+        # keyed on `id` alone, it would silently overwrite the first session's
+        # already-saved grade using the stale repetitions/interval_days/
+        # easiness it read before the first session's write landed — the
+        # first person's review would vanish with no error, even though
+        # `review` told them it was saved.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "d", parse_deck("Q: a\nA: 1\n"), today)
+            stale_row = due_cards(conn, today)[0]
+
+            # Session A grades first and commits.
+            due_a = record_review(conn, stale_row, Grade.EASY, today)
+            self.assertIsNotNone(due_a)
+
+            # Session B is still holding the *original* row it fetched before
+            # session A's write — its UPDATE must not match now that the row
+            # has moved on.
+            due_b = record_review(conn, stale_row, Grade.AGAIN, today)
+            self.assertIsNone(due_b)
+
+            # The database reflects session A's grade (EASY), not session B's
+            # stale-based one (AGAIN) clobbering it.
+            saved = conn.execute(
+                "SELECT repetitions, interval_days, easiness, due_date FROM cards WHERE id = ?",
+                (stale_row["id"],),
+            ).fetchone()
+            self.assertEqual(saved["repetitions"], 1)
+            self.assertEqual(saved["due_date"], due_a.isoformat())
+            self.assertGreater(saved["easiness"], stale_row["easiness"])
+
     def test_open_db_seeds_a_gitignore_in_a_freshly_created_state_dir(self):
         # A user following the README into their own git-tracked decks
         # folder has no reason to know the review database needs its own
