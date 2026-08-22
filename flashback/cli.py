@@ -26,6 +26,7 @@ from .storage import (
     due_cards,
     ensure_state_dir,
     hard_cards,
+    known_decks,
     next_due_date,
     open_db,
     prune_missing_decks,
@@ -377,6 +378,25 @@ def cmd_edit(args):
     return 0
 
 
+def _check_deck_filter(conn, deck):
+    """Return an error message if `deck` doesn't match any deck the database
+    currently knows about, else None.
+
+    Only checked once the database has at least one deck at all — an empty
+    database already gets its own "no decks yet" message from each command's
+    existing check, and that's the more honest thing to say there than "no
+    such deck." Otherwise a mistyped `--deck` has always silently matched
+    zero rows and printed exactly what a caught-up deck prints, with no way
+    to tell the two apart.
+    """
+    if deck is None:
+        return None
+    known = known_decks(conn)
+    if not known or deck in known:
+        return None
+    return f"no such deck: {deck!r}. known decks: {', '.join(known)}"
+
+
 def _print_nothing_due(conn, today, deck):
     """The 'nothing due' message, plus when the next card actually comes back.
 
@@ -396,6 +416,10 @@ def _print_nothing_due(conn, today, deck):
 def cmd_due(args):
     today = date.today()
     with open_db(_db_path(args)) as conn:
+        error = _check_deck_filter(conn, args.deck)
+        if error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         rows = due_cards(conn, today, args.deck)
         if not rows:
             _print_nothing_due(conn, today, args.deck)
@@ -448,6 +472,10 @@ def cmd_hard(args):
     today = date.today()
     with open_db(_db_path(args)) as conn:
         total = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+        error = _check_deck_filter(conn, args.deck)
+        if error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         rows = hard_cards(conn, args.deck)
     if not total:
         print("no decks yet. run `flashback sync` first.")
@@ -499,6 +527,10 @@ def _streak(count):
 def cmd_review(args):
     today = date.today()
     with open_db(_db_path(args)) as conn:
+        error = _check_deck_filter(conn, args.deck)
+        if error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         rows = due_cards(conn, today, args.deck)
         if not rows:
             _print_nothing_due(conn, today, args.deck)

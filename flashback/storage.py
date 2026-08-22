@@ -266,3 +266,14 @@ def deck_stats(conn, today: date):
            FROM cards GROUP BY deck ORDER BY deck""",
         (today.isoformat(), today.isoformat()),
     ).fetchall()
+
+
+def known_decks(conn):
+    """Distinct deck names that currently have at least one card.
+
+    `due`/`review`/`hard` filter by `deck` at the SQL level, so a typo'd
+    `--deck` value has always silently matched zero rows and printed exactly
+    what a caught-up deck prints — no way to tell "you're done" from "you
+    mistyped." This is what a `--deck` argument is checked against.
+    """
+    return [row[0] for row in conn.execute("SELECT DISTINCT deck FROM cards ORDER BY deck")]

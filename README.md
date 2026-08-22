@@ -184,6 +184,15 @@ next card is due 2026-08-26 (in 6 days).
 the future. If you pass `--deck`, the next date reported is that deck's,
 not the whole collection's.
 
+`due`, `review`, and `hard` all reject a `--deck` name that doesn't match
+any deck you actually have (once you have at least one), rather than
+silently behaving like an empty, caught-up deck:
+
+```
+$ flashback due --deck itlaian
+error: no such deck: 'itlaian'. known decks: geology, italian, spanish
+```
+
 ## What you're bad at
 
 The whole pitch of spaced repetition is that the tool works out what you

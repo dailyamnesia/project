@@ -1027,5 +1027,84 @@ class TestHardCommand(unittest.TestCase):
         self.assertEqual(astro.split()[1:4], ["2", "0", "1"])
 
 
+class TestDeckFilterValidation(unittest.TestCase):
+    """`due`/`review`/`hard` should reject a `--deck` that matches nothing.
+
+    Each of the three filters by deck at the SQL level, so a typo has always
+    silently matched zero rows and printed exactly what a caught-up deck
+    prints ("nothing due") — no way to tell "you're done" from "you
+    mistyped." Only checked once the database actually knows about at least
+    one deck; an empty database keeps its existing "no decks yet" message,
+    which is the more honest thing to say there.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
+
+    def run_flashback(self, *args):
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
+
+    def capture(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback(*args)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_due_rejects_a_deck_name_matching_nothing(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        rc, out, err = self.capture("due", "--deck", "italian")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("no such deck: 'italian'", err)
+        self.assertIn("spanish", err)
+
+    def test_review_rejects_a_deck_name_matching_nothing(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        rc, out, err = self.capture("review", "--deck", "italian")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("no such deck: 'italian'", err)
+
+    def test_hard_rejects_a_deck_name_matching_nothing(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        rc, out, err = self.capture("hard", "--deck", "italian")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("no such deck: 'italian'", err)
+
+    def test_a_real_deck_name_is_unaffected(self):
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        rc, out, err = self.capture("due", "--deck", "spanish")
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+
+    def test_an_empty_database_keeps_its_own_no_decks_message_instead(self):
+        # Nothing has ever synced, so there's no honest "known decks" list to
+        # offer — the existing "no decks yet" message is the more truthful
+        # answer than "no such deck", not a case this check should touch.
+        rc, out, err = self.capture("hard", "--deck", "italian")
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+        self.assertIn("run `flashback sync`", out)
+
+        rc, out, err = self.capture("due", "--deck", "italian")
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+        self.assertIn("nothing due", out)
+
+
 if __name__ == "__main__":
     unittest.main()
