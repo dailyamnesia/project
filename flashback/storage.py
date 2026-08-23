@@ -255,17 +255,20 @@ def prune_missing_decks(conn, existing_deck_names):
     return pruned
 
 
-def deck_stats(conn, today: date):
-    return conn.execute(
-        """SELECT deck,
+def deck_stats(conn, today: date, deck: str = None):
+    query = """SELECT deck,
                   COUNT(*) AS total,
                   SUM(CASE WHEN due_date <= ? THEN 1 ELSE 0 END) AS due,
                   SUM(CASE WHEN repetitions = 0 AND last_reviewed IS NOT NULL
                            THEN 1 ELSE 0 END) AS missed,
                   MIN(CASE WHEN due_date > ? THEN due_date END) AS next_due
-           FROM cards GROUP BY deck ORDER BY deck""",
-        (today.isoformat(), today.isoformat()),
-    ).fetchall()
+           FROM cards"""
+    params = [today.isoformat(), today.isoformat()]
+    if deck is not None:
+        query += " WHERE deck = ?"
+        params.append(deck)
+    query += " GROUP BY deck ORDER BY deck"
+    return conn.execute(query, params).fetchall()
 
 
 def known_decks(conn):

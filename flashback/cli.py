@@ -435,7 +435,11 @@ def cmd_due(args):
 def cmd_stats(args):
     today = date.today()
     with open_db(_db_path(args)) as conn:
-        rows = deck_stats(conn, today)
+        error = _check_deck_filter(conn, args.deck)
+        if error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        rows = deck_stats(conn, today, args.deck)
     if not rows:
         print("no decks yet. run `flashback sync` first.")
         return 0
@@ -643,6 +647,7 @@ def build_parser():
     p_review.set_defaults(func=cmd_review)
 
     p_stats = sub.add_parser("stats", help="show per-deck totals")
+    p_stats.add_argument("--deck", help="limit to a single deck")
     p_stats.set_defaults(func=cmd_stats)
 
     p_hard = sub.add_parser("hard", help="show the cards you've found hardest")

@@ -949,6 +949,19 @@ class TestNextDueReporting(unittest.TestCase):
         # spanish is due right now, so it has no *future* date to report.
         self.assertTrue(spanish.rstrip().endswith("-"), spanish)
 
+    def test_stats_deck_filter_shows_only_that_deck(self):
+        # `due`/`review`/`hard` all take `--deck`; `stats` should too, the
+        # same way its own README section already claims it does.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("add", "geology", "-q", "batholith?", "-a", "big rock")
+        self.run_flashback("sync")
+
+        rc, out = self.capture("stats", "--deck", "geology")
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertTrue(any(line.startswith("geology") for line in lines))
+        self.assertFalse(any(line.startswith("spanish") for line in lines))
+
 
 class TestHardCommand(unittest.TestCase):
     """`hard` should tell a learner which cards they're actually bad at.
@@ -1087,9 +1100,9 @@ class TestHardCommand(unittest.TestCase):
 
 
 class TestDeckFilterValidation(unittest.TestCase):
-    """`due`/`review`/`hard` should reject a `--deck` that matches nothing.
+    """`due`/`review`/`hard`/`stats` should reject a `--deck` that matches nothing.
 
-    Each of the three filters by deck at the SQL level, so a typo has always
+    Each of the four filters by deck at the SQL level, so a typo has always
     silently matched zero rows and printed exactly what a caught-up deck
     prints ("nothing due") — no way to tell "you're done" from "you
     mistyped." Only checked once the database actually knows about at least
@@ -1138,6 +1151,18 @@ class TestDeckFilterValidation(unittest.TestCase):
         self.run_flashback("sync")
 
         rc, out, err = self.capture("hard", "--deck", "italian")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("no such deck: 'italian'", err)
+
+    def test_stats_rejects_a_deck_name_matching_nothing(self):
+        # The README documents `stats --deck` in the same breath as
+        # `due`/`review`'s next-due-date filtering, but `stats`'s own
+        # subparser never actually grew a `--deck` argument to match.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        rc, out, err = self.capture("stats", "--deck", "italian")
         self.assertEqual(rc, 1)
         self.assertEqual(out, "")
         self.assertIn("no such deck: 'italian'", err)
