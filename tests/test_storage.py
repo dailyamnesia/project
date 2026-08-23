@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from flashback.parser import parse_deck
-from flashback.scheduler import Grade
+from flashback.scheduler import DEFAULT_EASINESS, Grade
 from flashback.storage import (
     SCHEMA,
     due_cards,
@@ -139,6 +139,39 @@ class TestStorage(unittest.TestCase):
             )
             questions = [row["question"] for row in hard_cards(conn)]
             self.assertEqual(questions, ["missed"])
+
+    def test_hard_cards_includes_a_currently_missed_card_even_if_old_easy_streaks_kept_it_above_default(self):
+        # hard_cards' own WHERE clause used to require easiness < DEFAULT_EASINESS
+        # for *every* row, including ones flagged currently_missed — but easiness
+        # only ever tracks the running total of every grade a card has ever
+        # gotten, not just the most recent one. A long enough run of `easy`
+        # grades (+0.1 each, no ceiling) can push a card's easiness high enough
+        # that a single subsequent `again` (-0.8) still leaves it above where
+        # every card starts, even though the card was, in plain language, just
+        # missed. deck_stats' "missed" column has no such easiness condition
+        # (just repetitions = 0 AND last_reviewed IS NOT NULL) and counts this
+        # card; hard_cards used to silently drop it from its output entirely,
+        # contradicting both deck_stats and its own "missed at your last
+        # review" framing for the exact card that phrase describes.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            self._graded(
+                conn,
+                today,
+                "d",
+                "Q: easy streak then missed\nA: 1\n",
+                {"easy streak then missed": [Grade.EASY] * 9 + [Grade.AGAIN]},
+            )
+            row = conn.execute(
+                "SELECT * FROM cards WHERE deck = ? AND question = ?",
+                ("d", "easy streak then missed"),
+            ).fetchone()
+            self.assertEqual(row["repetitions"], 0)
+            self.assertGreaterEqual(row["easiness"], DEFAULT_EASINESS)
+
+            rows = hard_cards(conn)
+            self.assertEqual([r["question"] for r in rows], ["easy streak then missed"])
+            self.assertTrue(rows[0]["currently_missed"])
 
     def test_hard_cards_puts_a_currently_missed_card_above_an_older_harder_one(self):
         # The heart of it: easiness barely recovers (`good` adds nothing, `easy`

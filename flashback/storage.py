@@ -139,12 +139,24 @@ def next_due_date(conn, today: date, deck: str = None):
 
 
 def hard_cards(conn, deck: str = None):
-    """Cards whose grading history has pushed easiness below its starting value.
+    """Cards whose grading history has pushed easiness below its starting value,
+    plus any card that was missed outright at its last review.
 
     Every card starts at DEFAULT_EASINESS, and only `again` (-0.8) and `hard`
-    (-0.14) move it down — `good` leaves it alone and `easy` adds 0.1. So this
-    isn't an arbitrary cutoff: it's exactly "cards you have, on balance, gotten
-    wrong or found hard at some point".
+    (-0.14) move it down — `good` leaves it alone and `easy` adds 0.1. So
+    "easiness below default" is a reasonable stand-in for "cards you have, on
+    balance, gotten wrong or found hard at some point" — but only a stand-in:
+    easiness has no ceiling, so a long enough run of `easy` grades can push a
+    card's easiness so far above the default that a single subsequent `again`
+    (-0.8) still leaves it above where every card started. Without the
+    `OR repetitions = 0` below, a card in exactly that state — just missed,
+    `currently_missed` would be true — fails the `easiness < DEFAULT_EASINESS`
+    condition and is silently dropped from this function's output entirely,
+    even though `deck_stats`' "missed" column (which only checks
+    `repetitions = 0 AND last_reviewed IS NOT NULL`, no easiness condition at
+    all) still counts it, and the card was, in plain language, just missed. A
+    currently-missed card is unconditionally included here for that reason;
+    easiness alone still gates the second, "recovering" group below.
 
     Ordered worst-first, but "worst" deliberately leads with `currently_missed`
     rather than with easiness alone. Easiness only ever creeps back up (+0.1 at
@@ -171,7 +183,7 @@ def hard_cards(conn, deck: str = None):
     """
     query = """SELECT *, (repetitions = 0) AS currently_missed
                FROM cards
-               WHERE easiness < ? AND last_reviewed IS NOT NULL"""
+               WHERE last_reviewed IS NOT NULL AND (easiness < ? OR repetitions = 0)"""
     params = [DEFAULT_EASINESS]
     if deck is not None:
         query += " AND deck = ?"

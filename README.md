@@ -217,12 +217,17 @@ Q: Which planet has the shortest day?
    correct at your last 4 reviews; next review 2026-09-08
 ```
 
-A card only appears here if your own grading has pushed its easiness below
-where every card starts. That's not a simple tally of grades either way —
-`again` (-0.8) and `hard` (-0.14) move easiness down far more than `easy`
-(+0.1) moves it back up, so a single `hard` isn't undone by a single `easy`;
-it takes two. If your grading hasn't pushed a card below its starting
-point, `flashback hard` says so rather than ranking cards you're fine with.
+A card appears here if you missed it at your last review, or if your own
+grading has pushed its easiness below where every card starts. The
+easiness part isn't a simple tally of grades either way — `again` (-0.8)
+and `hard` (-0.14) move easiness down far more than `easy` (+0.1) moves it
+back up, so a single `hard` isn't undone by a single `easy`; it takes two.
+(Easiness also has no ceiling, so a long run of `easy` grades can push it
+high enough that one later miss still leaves it above the starting point —
+which is why a just-missed card is always included regardless of its
+easiness, not only when easiness itself has dropped.) If a card hasn't
+been missed and your grading hasn't pushed it below its starting point,
+`flashback hard` says so rather than ranking cards you're fine with.
 
 The two groups matter, and they're the reason this isn't just a sorted
 list. Easiness barely recovers once it falls (`good` doesn't raise it at
