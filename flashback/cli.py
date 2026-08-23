@@ -237,7 +237,7 @@ def cmd_sync(args):
             conn.commit()
             total_added += added
             total_removed += removed
-            print(f"{deck_name}: {len(cards)} cards ({added} new, {removed} removed)")
+            print(f"{deck_name}: {_cards(len(cards))} ({added} new, {removed} removed)")
         pruned = prune_missing_decks(conn, deck_names)
         conn.commit()
         for deck_name, count in pruned:

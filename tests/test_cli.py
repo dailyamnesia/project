@@ -513,6 +513,28 @@ class TestSyncCommand(unittest.TestCase):
             ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
         )
 
+    def capture(self, *args):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = self.run_flashback(*args)
+        return rc, buf.getvalue()
+
+    def test_sync_per_deck_line_uses_singular_card_for_exactly_one(self):
+        # cmd_sync's per-deck summary built its own "N cards" string directly,
+        # never through the _cards() helper hard's output already uses for
+        # exactly this reason (session 66) — so a deck with exactly one card
+        # printed "solo: 1 cards (1 new, 0 removed)".
+        self.run_flashback("add", "solo", "-q", "only?", "-a", "yes")
+        _, out = self.capture("sync")
+        self.assertIn("solo: 1 card (1 new, 0 removed)", out)
+        self.assertNotIn("1 cards", out)
+
+    def test_sync_per_deck_line_uses_plural_card_for_two(self):
+        self.run_flashback("add", "pair", "-q", "one?", "-a", "a")
+        self.run_flashback("add", "pair", "-q", "two?", "-a", "b")
+        _, out = self.capture("sync")
+        self.assertIn("pair: 2 cards (2 new, 0 removed)", out)
+
     def test_deleting_a_deck_file_removes_its_cards_on_next_sync(self):
         # Without prune_missing_decks, this deck's cards would sit in the database
         # forever: sync only reconciles decks it's handed a file for, so a deck file
