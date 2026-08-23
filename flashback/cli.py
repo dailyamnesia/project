@@ -678,9 +678,21 @@ def main(argv=None):
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except sqlite3.Error as exc:
-        # Unlike OSError, sqlite3's own message doesn't include the path
-        # (e.g. "unable to open database file"), so name it ourselves.
-        print(f"error: couldn't open the review database in {args.state_dir!r}: {exc}", file=sys.stderr)
+        # This handler wraps *all* of args.func(args), not just open_db's own
+        # connect() — sync/review/hard all keep using the connection well
+        # after opening it (per-deck/per-card commits, later SELECTs), so a
+        # sqlite3.Error raised here doesn't mean opening the database failed;
+        # it can just as easily be a `commit()` losing a lock-contention race
+        # against another flashback process sharing this --state-dir (a real
+        # "database is locked" OperationalError, reproduced by racing two
+        # processes against the same state dir) after several decks/cards
+        # were already saved and their success lines already printed. Saying
+        # "couldn't open" here would flatly contradict output already on the
+        # screen above it, so this is worded to hold regardless of when the
+        # error actually struck. Unlike OSError, sqlite3's own message
+        # doesn't include the path (e.g. "unable to open database file"), so
+        # name it ourselves.
+        print(f"error: problem with the review database in {args.state_dir!r}: {exc}", file=sys.stderr)
         return 1
 
 

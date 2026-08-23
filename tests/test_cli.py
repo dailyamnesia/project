@@ -1,5 +1,6 @@
 import io
 import os
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -601,6 +602,42 @@ class TestSyncCommand(unittest.TestCase):
         # interruption — it must actually be in the database, not rolled
         # back just because a later deck in the same run failed.
         self.assertIn("alpha", rows)
+
+    def test_db_lock_contention_mid_sync_does_not_claim_the_database_never_opened(self):
+        # Two flashback processes sharing one --state-dir can race on the
+        # same sqlite file — a second deck's commit losing that race raises
+        # sqlite3.OperationalError("database is locked") *after* open_db
+        # already succeeded and the first deck's "N new, M removed" line
+        # already printed. main()'s sqlite3.Error handler used to always say
+        # "couldn't open the review database", which flatly contradicts the
+        # success line already on the screen above it and the row that's
+        # actually sitting in the database (verified below).
+        self.run_flashback("add", "alpha", "-q", "one?", "-a", "uno")
+        self.run_flashback("add", "beta", "-q", "two?", "-a", "dos")
+
+        calls = []
+
+        def flaky_sync_deck(conn, deck, cards, today):
+            calls.append(deck)
+            if len(calls) == 2:
+                raise sqlite3.OperationalError("database is locked")
+            return real_sync_deck(conn, deck, cards, today)
+
+        stderr = io.StringIO()
+        with patch("flashback.cli.sync_deck", side_effect=flaky_sync_deck):
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                rc = self.run_flashback("sync")
+        self.assertEqual(rc, 1)
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = {row["deck"] for row in conn.execute("SELECT deck FROM cards")}
+        # Same data-safety property as the KeyboardInterrupt case above: the
+        # deck synced before the failure must really be saved.
+        self.assertIn("alpha", rows)
+        # The error text must not claim the database was never opened — it
+        # demonstrably was, for both the CREATE TABLE at open_db() and
+        # alpha's own successful commit moments earlier in this same run.
+        self.assertNotIn("couldn't open", stderr.getvalue())
 
     def test_hand_created_deck_file_with_control_character_name_is_skipped(self):
         # Deck files are documented as normal to hand-edit/hand-create
