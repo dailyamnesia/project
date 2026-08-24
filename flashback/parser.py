@@ -19,6 +19,7 @@ the card is the answer.
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import Optional
 
 CARD_SEPARATOR = re.compile(r"^-{3,}\s*$", re.MULTILINE)
 Q_PREFIX = re.compile(r"^Q:\s?", re.IGNORECASE)
@@ -297,7 +298,7 @@ def remove_card(existing_text: str, question: str) -> str:
 
 
 def edit_card(
-    existing_text: str, question: str, new_question: str | None = None, new_answer: str | None = None
+    existing_text: str, question: str, new_question: Optional[str] = None, new_answer: Optional[str] = None
 ) -> str:
     """Return deck file text with the card matching `question` updated in place.
 
