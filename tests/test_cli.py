@@ -426,6 +426,47 @@ class TestEditCommand(unittest.TestCase):
         cards = parse_deck(deck_path.read_text(encoding="utf-8"))
         self.assertEqual(cards[0].answer, "coffee")
 
+    def test_new_question_differing_only_in_unicode_normalization_form_does_not_warn_of_reset(self):
+        # --new-question is normalized (edit_card -> normalize_question) before
+        # it's compared/stored, exactly like -q already is on the lookup side
+        # (see test_matches_question_with_differing_unicode_normalization_form
+        # above). So a --new-question that's merely a different normalization
+        # form of the *same* text as the old question produces the exact same
+        # stored (NFC) question, hence the exact same storage.card_id on the
+        # next sync -- this is, in the README's own words, "the same card, as
+        # far as scheduling is concerned," and its review history survives.
+        #
+        # cmd_edit's "review history will reset" note used to compare the raw,
+        # un-normalized --new-question against the (already normalized) old
+        # question, so it fired here even though nothing about the card's
+        # identity actually changed -- a false claim contradicted by the
+        # untouched review history right below it.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+        self.run_flashback("add", "spanish", "-q", nfc, "-a", "hola")
+        self.run_flashback("sync")
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            row = conn.execute("SELECT * FROM cards").fetchone()
+            due = record_review(conn, row, Grade.GOOD, date.today())
+            self.assertIsNotNone(due)
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc = self.run_flashback("edit", "spanish", "-q", nfc, "--new-question", nfd)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("will reset", out.getvalue())
+
+        self.run_flashback("sync")
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            row = conn.execute("SELECT * FROM cards").fetchone()
+            # Review history (built up by the record_review call above) must
+            # have survived the edit + re-sync -- proving the note would have
+            # been lying had it fired.
+            self.assertEqual(row["repetitions"], 1)
+            self.assertIsNotNone(row["last_reviewed"])
+
     def test_edits_unrelated_card_despite_a_poisoned_card_hand_edited_into_the_deck(self):
         # Same reasoning as remove's equivalent test — and cmd_edit has its
         # own separate pre-lookup (to print the current Q/A before prompting)

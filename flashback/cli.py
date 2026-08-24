@@ -375,7 +375,16 @@ def cmd_edit(args):
 
         _atomic_write_text(deck_path, new_text)
     note = ""
-    if new_question is not None and new_question.strip() != question:
+    # Compare normalized forms, not raw ones: edit_card() below normalizes
+    # new_question before storing it (same as -q's own lookup normalization,
+    # see the NFC/NFD tests above), so a --new-question that's merely a
+    # different Unicode normalization form of the *same* text as the old
+    # question produces the exact same stored question, hence the exact same
+    # storage.card_id on the next sync -- no history is actually reset, so
+    # this note must not claim otherwise. A raw comparison used to fire this
+    # note in exactly that case, contradicting the card's real, unreset
+    # review history.
+    if new_question is not None and normalize_question(new_question.strip()) != question:
         note = (
             " (question changed — this card's review history will reset on the next"
             " sync, since it's keyed on question text)"
