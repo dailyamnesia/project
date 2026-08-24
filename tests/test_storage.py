@@ -9,9 +9,11 @@ from flashback.parser import parse_deck
 from flashback.scheduler import DEFAULT_EASINESS, Grade
 from flashback.storage import (
     SCHEMA,
+    deck_stats,
     due_cards,
     ensure_state_dir,
     hard_cards,
+    known_decks,
     next_due_date,
     open_db,
     prune_missing_decks,
@@ -302,6 +304,69 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(pruned, [])
             self.assertEqual(len(due_cards(conn, today)), 1)
 
+    def test_known_decks_includes_a_deck_synced_with_zero_cards(self):
+        # Regression test: a deck file that parses fine but has no cards in it
+        # (a legitimately empty deck, not a mistake) used to leave no trace at
+        # all in `cards`, so `known_decks` — which used to read
+        # `SELECT DISTINCT deck FROM cards` — couldn't tell it apart from a
+        # deck that was never synced. That made cli.py's `_check_deck_filter`
+        # reject `--deck <that deck>` as "no such deck" even right after a
+        # successful `sync` reported it by name.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "empty", [], today)
+            sync_deck(conn, "full", parse_deck("Q: a\nA: 1\n"), today)
+            self.assertEqual(known_decks(conn), ["empty", "full"])
+
+    def test_prune_missing_decks_also_removes_a_zero_card_deck_whose_file_is_gone(self):
+        # The old `SELECT DISTINCT deck FROM cards` candidate list couldn't see
+        # a zero-card deck either, so deleting its file left it in
+        # `known_decks` forever with no way to prune it back out.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "empty", [], today)
+            pruned = prune_missing_decks(conn, set())
+            self.assertEqual(pruned, [("empty", 0)])
+            self.assertEqual(known_decks(conn), [])
+
+    def test_a_database_with_cards_but_no_decks_table_rows_is_backfilled_on_open(self):
+        # Regression test for an upgrade case the `decks` table itself
+        # introduces: a database created before `decks` existed (or one
+        # whose `cards` rows otherwise predate the table) has real cards
+        # but no matching `decks` row, since only `sync_deck` ever wrote to
+        # `decks` and it was never re-run. Without a backfill, `known_decks`
+        # and `deck_stats` would falsely report "no decks yet" for a deck
+        # that plainly has cards — inserted directly here, bypassing
+        # `sync_deck`, to simulate exactly that pre-existing state.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO cards (id, deck, question, answer, repetitions,"
+                " interval_days, easiness, due_date) VALUES (?, ?, ?, ?, 0, 1, 2.5, ?)",
+                ("legacy0000000001", "legacy", "old question", "old answer", today.isoformat()),
+            )
+            conn.execute("DELETE FROM decks")
+        with open_db(self.db_path) as conn:
+            self.assertEqual(known_decks(conn), ["legacy"])
+            rows = {row["deck"]: row for row in deck_stats(conn, today)}
+            self.assertEqual(rows["legacy"]["total"], 1)
+
+    def test_deck_stats_includes_a_zero_card_deck_with_zero_totals(self):
+        # `stats`' whole job is per-deck totals; a deck with zero cards should
+        # show up with 0s, not vanish from the table entirely as if it had
+        # never been synced (the old `GROUP BY deck` over `cards` alone had no
+        # row to group when a deck had no cards).
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "empty", [], today)
+            sync_deck(conn, "full", parse_deck("Q: a\nA: 1\n"), today)
+            rows = {row["deck"]: row for row in deck_stats(conn, today)}
+            self.assertEqual(set(rows), {"empty", "full"})
+            self.assertEqual(rows["empty"]["total"], 0)
+            self.assertEqual(rows["empty"]["due"], 0)
+            self.assertEqual(rows["empty"]["missed"], 0)
+            self.assertIsNone(rows["empty"]["next_due"])
+
     def test_concurrent_sync_of_the_same_new_cards_does_not_crash(self):
         """Regression test for a real race, found by running `sync` from
         several terminals against the same state file at once: two
@@ -321,7 +386,7 @@ class TestStorage(unittest.TestCase):
         barrier = threading.Barrier(15)
 
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(SCHEMA)
+            conn.executescript(SCHEMA)
 
         def worker():
             conn = sqlite3.connect(self.db_path)

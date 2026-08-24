@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS cards (
     due_date TEXT NOT NULL,
     last_reviewed TEXT
 );
+CREATE TABLE IF NOT EXISTS decks (
+    name TEXT PRIMARY KEY
+);
 """
 
 
@@ -67,7 +70,19 @@ def open_db(db_path: Path):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute(SCHEMA)
+        # executescript, not execute: SCHEMA now creates two tables
+        # (`cards` and `decks`), and Connection.execute rejects more than
+        # one statement at a time.
+        conn.executescript(SCHEMA)
+        # Backfill for a database that already had cards before the `decks`
+        # table existed: without this, a deck that's never been re-synced
+        # since upgrading has real rows in `cards` but no row in `decks`,
+        # so every command that now reads deck existence from `decks` alone
+        # (known_decks, deck_stats) would falsely claim "no decks yet" even
+        # though `cards` proves otherwise. INSERT OR IGNORE makes this a
+        # no-op once a deck is already tracked, so it's harmless to run on
+        # every open, not just once.
+        conn.execute("INSERT OR IGNORE INTO decks (name) SELECT DISTINCT deck FROM cards")
         yield conn
         conn.commit()
     finally:
@@ -79,7 +94,20 @@ def sync_deck(conn, deck: str, cards, today: date):
     and remove cards no longer present in the deck file.
 
     Returns (added, removed) counts.
+
+    Also records `deck` in the `decks` table unconditionally, even when
+    `cards` is empty. Before this table existed, a deck's presence was
+    inferred entirely from `SELECT DISTINCT deck FROM cards` — which works
+    right up until a deck file with zero cards (a legitimately empty deck,
+    not a mistake) gets synced. That deck then has no rows anywhere in
+    `cards`, so it's indistinguishable from a deck that was never synced at
+    all: `known_decks()` doesn't list it, so `_check_deck_filter` in cli.py
+    rejects `due --deck <it>` / `stats --deck <it>` / `hard --deck <it>`
+    with "no such deck" — the exact false "you mistyped" that
+    `_check_deck_filter` exists to prevent, just triggered by a deck that's
+    real but currently card-less instead of one that never existed.
     """
+    conn.execute("INSERT OR IGNORE INTO decks (name) VALUES (?)", (deck,))
     seen_ids = set()
     added = 0
     for card in cards:
@@ -254,41 +282,68 @@ def prune_missing_decks(conn, existing_deck_names):
     `stats`, still shown by `review`, but unreachable from `remove`/`edit` since both
     require the deck file to exist. This is the whole-deck counterpart to the
     per-card removal `sync_deck` already does.
+
+    Enumerates candidates from the `decks` table, not `SELECT DISTINCT deck FROM
+    cards`: a deck synced with zero cards has a `decks` row but no `cards` rows at
+    all, so reading candidates from `cards` alone would never see it — its deleted
+    file would leave a phantom `decks` entry behind forever, the same "database
+    remembers something the filesystem no longer has" problem this function exists
+    to fix for cards, just one layer up. `count` is still whatever `cards` had for
+    that deck (zero for a deck that was already card-less).
     """
-    rows = conn.execute("SELECT DISTINCT deck FROM cards").fetchall()
+    rows = conn.execute("SELECT name FROM decks").fetchall()
     pruned = []
     for row in rows:
-        deck = row["deck"]
+        deck = row["name"]
         if deck in existing_deck_names:
             continue
         count = conn.execute("SELECT COUNT(*) FROM cards WHERE deck = ?", (deck,)).fetchone()[0]
         conn.execute("DELETE FROM cards WHERE deck = ?", (deck,))
+        conn.execute("DELETE FROM decks WHERE name = ?", (deck,))
         pruned.append((deck, count))
     return pruned
 
 
 def deck_stats(conn, today: date, deck: str = None):
-    query = """SELECT deck,
-                  COUNT(*) AS total,
-                  SUM(CASE WHEN due_date <= ? THEN 1 ELSE 0 END) AS due,
-                  SUM(CASE WHEN repetitions = 0 AND last_reviewed IS NOT NULL
+    """Per-deck totals: total/due/missed counts plus the next future due date.
+
+    LEFT JOINs `cards` onto `decks` rather than just grouping `cards` directly
+    (deck's old approach) so a deck synced with zero cards still gets its own
+    row here — "show per-deck totals" ought to include a real, currently-empty
+    deck showing zero of everything, the same way `stats` already shows a
+    fully caught-up deck as "0 due" rather than omitting it. Grouping `cards`
+    alone silently dropped a card-less deck's row entirely, which then read,
+    from `stats` output alone, as if the deck didn't exist — indistinguishable
+    from a typo'd `--deck`, right up until `_check_deck_filter` correctly
+    recognized the name and let the query through to prove it.
+    """
+    query = """SELECT decks.name AS deck,
+                  COUNT(cards.id) AS total,
+                  SUM(CASE WHEN cards.due_date <= ? THEN 1 ELSE 0 END) AS due,
+                  SUM(CASE WHEN cards.repetitions = 0 AND cards.last_reviewed IS NOT NULL
                            THEN 1 ELSE 0 END) AS missed,
-                  MIN(CASE WHEN due_date > ? THEN due_date END) AS next_due
-           FROM cards"""
+                  MIN(CASE WHEN cards.due_date > ? THEN cards.due_date END) AS next_due
+           FROM decks
+           LEFT JOIN cards ON cards.deck = decks.name"""
     params = [today.isoformat(), today.isoformat()]
     if deck is not None:
-        query += " WHERE deck = ?"
+        query += " WHERE decks.name = ?"
         params.append(deck)
-    query += " GROUP BY deck ORDER BY deck"
+    query += " GROUP BY decks.name ORDER BY decks.name"
     return conn.execute(query, params).fetchall()
 
 
 def known_decks(conn):
-    """Distinct deck names that currently have at least one card.
+    """Every deck name that's currently synced, whether or not it has any cards.
 
-    `due`/`review`/`hard` filter by `deck` at the SQL level, so a typo'd
+    `due`/`review`/`hard`/`stats` filter by `deck` at the SQL level, so a typo'd
     `--deck` value has always silently matched zero rows and printed exactly
     what a caught-up deck prints — no way to tell "you're done" from "you
     mistyped." This is what a `--deck` argument is checked against.
+
+    Reads from the `decks` table, not `SELECT DISTINCT deck FROM cards`: the
+    latter can't see a deck synced with zero cards (a legitimately empty deck
+    file has no rows in `cards` at all), so a real `--deck <empty deck>` used
+    to fail this check with the same "no such deck" error as an actual typo.
     """
-    return [row[0] for row in conn.execute("SELECT DISTINCT deck FROM cards ORDER BY deck")]
+    return [row[0] for row in conn.execute("SELECT name FROM decks ORDER BY name")]

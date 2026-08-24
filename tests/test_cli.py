@@ -1225,6 +1225,44 @@ class TestDeckFilterValidation(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertIn("nothing due", out)
 
+    def test_a_deck_synced_with_zero_cards_is_not_treated_as_nonexistent(self):
+        # Regression test: a deck file that parses fine but currently has no
+        # cards in it (e.g. every card was hand-removed, or it's a fresh file
+        # someone's about to fill in) used to leave no trace in the `cards`
+        # table at all, so `--deck <that deck>` was indistinguishable from a
+        # typo — `due`/`stats`/`hard` all rejected it with "no such deck"
+        # right after `sync` had just reported it by name.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "empty.md").write_text("", encoding="utf-8")
+        self.run_flashback("add", "full", "-q", "hello?", "-a", "hola")
+        rc, sync_out, _ = self.capture("sync")
+        self.assertEqual(rc, 0)
+        self.assertIn("empty: 0 cards (0 new, 0 removed)", sync_out)
+
+        rc, out, err = self.capture("due", "--deck", "empty")
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+        self.assertIn("nothing due", out)
+
+        rc, out, err = self.capture("hard", "--deck", "empty")
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+        self.assertIn("nothing looks hard yet", out)
+
+        rc, out, err = self.capture("stats", "--deck", "empty")
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+        self.assertIn("empty", out)
+        self.assertIn("0", out)
+
+        # Unfiltered `stats` should list the empty deck too, not silently
+        # drop it as if it had never been synced.
+        rc, out, err = self.capture("stats")
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertTrue(any(line.startswith("empty") for line in lines))
+        self.assertTrue(any(line.startswith("full") for line in lines))
+
 
 if __name__ == "__main__":
     unittest.main()
