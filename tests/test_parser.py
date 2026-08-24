@@ -1,3 +1,4 @@
+import unicodedata
 import unittest
 
 from flashback.parser import Card, ParseError, append_card, edit_card, parse_deck, remove_card
@@ -76,6 +77,20 @@ class TestParser(unittest.TestCase):
     def test_bidi_override_typed_directly_into_a_deck_file_raises(self):
         with self.assertRaises(ParseError):
             parse_deck("Q: question\nA: evil‮txt.exe\n")
+
+    def test_duplicate_question_differing_only_in_unicode_normalization_form_raises(self):
+        # "é" has two equally valid Unicode encodings: one precomposed
+        # codepoint (NFC, U+00E9) or "e" followed by a combining acute accent
+        # (NFD, U+0065 U+0301). They render identically — a person reading
+        # the deck file can't tell them apart — so, like the whitespace-only
+        # difference the duplicate check already ignores, this must still be
+        # caught as the same question, not silently treated as two cards.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)  # sanity: genuinely different strings
+        text = f"Q: {nfc}\nA: first\n---\nQ: {nfd}\nA: second\n"
+        with self.assertRaises(ParseError):
+            parse_deck(text)
 
 
 class TestAppendCard(unittest.TestCase):
@@ -269,6 +284,18 @@ class TestRemoveCard(unittest.TestCase):
         text = "Q: a\nA: 1\n---\nQ: bad\nA: bell\x07here\n"
         result = remove_card(text, "a")
         self.assertEqual(parse_deck(result, validate=False), [Card(question="bad", answer="bell\x07here")])
+
+    def test_matches_despite_differing_unicode_normalization_form(self):
+        # Same "café" case as parse_deck's duplicate-detection test: the
+        # question stored in the file and the question text passed in to
+        # look it up can be spelled with the same characters in different
+        # Unicode normalization forms and still render identically — that
+        # has to match, the same way surrounding whitespace already does.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        text = append_card("", nfc, "coffee shop")
+        result = remove_card(text, nfd)
+        self.assertEqual(parse_deck(result), [])
 
 
 class TestEditCard(unittest.TestCase):

@@ -17,6 +17,7 @@ from .parser import (
     _check_card_text,
     append_card,
     edit_card,
+    normalize_question,
     parse_deck,
     remove_card,
 )
@@ -315,7 +316,12 @@ def cmd_edit(args):
         print(f"no such deck: {deck_path}", file=sys.stderr)
         return 1
 
-    question = (args.question if args.question is not None else input("Q: ")).strip()
+    # normalize_question here mirrors edit_card()'s own normalization of this
+    # same search key below — without it, a -q spelled in a different (but
+    # visually identical) Unicode normalization form than what's stored would
+    # fail this pre-lookup and error out before ever reaching edit_card(),
+    # the same gap that used to exist here for surrounding whitespace.
+    question = normalize_question((args.question if args.question is not None else input("Q: ")).strip())
 
     try:
         preview_text = _read_deck_text(deck_path)

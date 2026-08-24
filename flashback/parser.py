@@ -32,6 +32,35 @@ BIDI_FORMATTING_CLASSES = frozenset(
 )
 
 
+def normalize_question(question: str) -> str:
+    """Normalize a question to NFC so it compares equal regardless of how its
+    accented/composed characters happen to be encoded.
+
+    Unicode allows some characters two equally valid encodings — e.g. "é" as
+    one precomposed codepoint (NFC) or as "e" plus a combining acute accent
+    (NFD) — that render identically and are indistinguishable to anyone
+    reading the deck file, but compare unequal as plain Python strings.
+    Without this, two "differently-typed" spellings of the same question
+    could slip past parse_deck's duplicate check as if they were different
+    cards, hash to different storage.card_id values (so they'd schedule and
+    review as two unrelated cards despite looking like one), and make
+    remove/edit's exact-match lookup report "no card with that question
+    found" for a question that reads, on screen, exactly like one that's
+    really there — the same "looks the same but silently isn't" failure
+    shape the whitespace-stripping and the control-character/bidi-override
+    checks on this same field already exist to close.
+
+    Applied everywhere a question becomes (or is looked up as) a card's
+    identity: when a deck file is parsed (`_parse_card`) and whenever a
+    caller-supplied question is used to add, remove, or edit a specific card
+    (`append_card`, `remove_card`, `edit_card`) — so a parsed card's
+    `.question` and a freshly normalized search key always compare equal
+    when they're the same text, regardless of which normalization form
+    either one started out in.
+    """
+    return unicodedata.normalize("NFC", question)
+
+
 @dataclass
 class Card:
     question: str
@@ -116,7 +145,7 @@ def _parse_card(block: str) -> Card:
                 f"discarded ({line!r}):\n{block}"
             )
 
-    question = "\n".join(question_lines).strip()
+    question = normalize_question("\n".join(question_lines).strip())
     answer = "\n".join(answer_lines).strip()
 
     if not question:
@@ -230,7 +259,7 @@ def append_card(existing_text: str, question: str, answer: str) -> str:
     shouldn't be blocked by some other, unrelated card in the same deck
     failing `_check_card_text` — same reasoning as `remove_card`/`edit_card`.
     """
-    question = question.strip()
+    question = normalize_question(question.strip())
     answer = answer.strip()
     if not question:
         raise ParseError("question cannot be empty")
@@ -258,7 +287,7 @@ def remove_card(existing_text: str, question: str) -> str:
     Parses with `validate=False`: removing one card shouldn't be blocked by
     some other, unrelated card in the same deck failing `_check_card_text`.
     """
-    question = question.strip()
+    question = normalize_question(question.strip())
     cards = parse_deck(existing_text, validate=False)
     remaining = [card for card in cards if card.question != question]
     if len(remaining) == len(cards):
@@ -291,7 +320,7 @@ def edit_card(
     if new_question is None and new_answer is None:
         raise ParseError("must provide a new question and/or a new answer to edit")
 
-    question = question.strip()
+    question = normalize_question(question.strip())
     cards = parse_deck(existing_text, validate=False)
 
     updated = []
@@ -299,7 +328,7 @@ def edit_card(
     for card in cards:
         if card.question == question:
             found = True
-            q = new_question.strip() if new_question is not None else card.question
+            q = normalize_question(new_question.strip()) if new_question is not None else card.question
             a = new_answer.strip() if new_answer is not None else card.answer
             if not q:
                 raise ParseError("question cannot be empty")

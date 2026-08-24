@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import threading
+import unicodedata
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, timedelta
@@ -276,6 +277,23 @@ class TestRemoveCommand(unittest.TestCase):
         rc = self.run_flashback("remove", "vocab/spanish", "-q", "hello?")
         self.assertEqual(rc, 1)
 
+    def test_matches_question_with_differing_unicode_normalization_form(self):
+        # "é" can be spelled as one precomposed codepoint (NFC) or as "e"
+        # plus a combining acute accent (NFD) — both render identically, the
+        # same way "hello?" and "  hello?  " both read as the same question.
+        # -q in a different, but visually indistinguishable, normalization
+        # form than what was stored must still match.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+        self.run_flashback("add", "spanish", "-q", nfc, "-a", "coffee shop")
+
+        rc = self.run_flashback("remove", "spanish", "-q", nfd)
+        self.assertEqual(rc, 0)
+
+        deck_path = self.decks_dir / "spanish.md"
+        self.assertEqual(parse_deck(deck_path.read_text(encoding="utf-8")), [])
+
     def test_removes_unrelated_card_despite_a_poisoned_card_hand_edited_into_the_deck(self):
         # A control character typed straight into the deck file (bypassing
         # add/edit's own checks entirely) used to block remove of any other,
@@ -389,6 +407,24 @@ class TestEditCommand(unittest.TestCase):
     def test_deck_name_with_slash_is_rejected(self):
         rc = self.run_flashback("edit", "vocab/spanish", "-q", "hello?", "--new-answer", "x")
         self.assertEqual(rc, 1)
+
+    def test_matches_question_with_differing_unicode_normalization_form(self):
+        # Same case as remove's equivalent test, but this exercises cmd_edit's
+        # own separate pre-lookup (used to print the current Q/A before
+        # prompting) too, not just parser.edit_card — see
+        # test_matches_question_with_surrounding_whitespace above, which
+        # documents that same pre-lookup needed its own fix for whitespace.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+        self.run_flashback("add", "spanish", "-q", nfc, "-a", "coffee shop")
+
+        rc = self.run_flashback("edit", "spanish", "-q", nfd, "--new-answer", "coffee")
+        self.assertEqual(rc, 0)
+
+        deck_path = self.decks_dir / "spanish.md"
+        cards = parse_deck(deck_path.read_text(encoding="utf-8"))
+        self.assertEqual(cards[0].answer, "coffee")
 
     def test_edits_unrelated_card_despite_a_poisoned_card_hand_edited_into_the_deck(self):
         # Same reasoning as remove's equivalent test — and cmd_edit has its
