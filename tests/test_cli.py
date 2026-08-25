@@ -59,6 +59,32 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse((self.decks_dir / "spanish.md").exists())
 
+    def test_question_with_unicode_line_separator_is_rejected(self):
+        # U+2028 (LINE SEPARATOR) — a real-world hazard since some word
+        # processors and PDF viewers insert it for soft line breaks on
+        # copy-paste — isn't a control character and doesn't reorder
+        # anything, so it used to sail straight through `add`. But
+        # str.splitlines(), which the parser uses everywhere to find line
+        # boundaries, treats it exactly like a real "\n": the question
+        # `add` wrote to the deck file wasn't the question the very next
+        # `sync` (or a `remove`/`edit` lookup using that same original text)
+        # read back. Rejecting it here, like every other character that
+        # doesn't round-trip safely, closes that gap.
+        rc = self.run_flashback("add", "spanish", "-q", "before after", "-a", "hola")
+        self.assertEqual(rc, 1)
+        self.assertFalse((self.decks_dir / "spanish.md").exists())
+
+    def test_added_question_is_findable_by_remove_using_the_exact_same_text(self):
+        # A general round-trip sanity check: whatever text `add` accepts for
+        # a question must still compare equal to itself after being written
+        # to the deck file and re-parsed, or `remove`/`edit` can never find
+        # the card again by the question the user actually typed.
+        question = "capital of France?"
+        rc = self.run_flashback("add", "geo", "-q", question, "-a", "Paris")
+        self.assertEqual(rc, 0)
+        rc = self.run_flashback("remove", "geo", "-q", question)
+        self.assertEqual(rc, 0)
+
     def test_add_seeds_state_dir_gitignore_even_though_it_never_touches_the_db(self):
         # add/remove/edit never call open_db, only _deck_lock — this is the
         # one place a fresh --state-dir could be created without ever going

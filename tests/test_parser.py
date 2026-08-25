@@ -230,6 +230,40 @@ class TestAppendCard(unittest.TestCase):
         text = append_card("", "מה זה?", "זה בסדר")
         self.assertEqual(parse_deck(text)[0], Card(question="מה זה?", answer="זה בסדר"))
 
+    def test_question_with_unicode_line_separator_raises(self):
+        # U+2028 (LINE SEPARATOR) isn't a control character (Cc, so the Cc
+        # check doesn't catch it) and doesn't reorder anything (so the bidi
+        # check doesn't either) — but str.splitlines(), which _parse_card
+        # uses to find line boundaries, treats it exactly like a real "\n".
+        # Without this check, a question containing one parses and writes
+        # fine here, then silently comes back as a *different* string (a
+        # real newline in place of the invisible separator) the next time
+        # the deck file is parsed — e.g. the very next `sync`, or a
+        # `remove`/`edit` lookup using the exact same text originally passed
+        # to `add`.
+        with self.assertRaises(ParseError):
+            append_card("", "before after", "answer")
+
+    def test_answer_with_unicode_paragraph_separator_raises(self):
+        # U+2029 (PARAGRAPH SEPARATOR) is splitlines()'s other non-Cc,
+        # non-bidi line boundary; same reasoning as U+2028 above.
+        with self.assertRaises(ParseError):
+            append_card("", "question", "before after")
+
+    def test_hand_edited_line_separator_would_silently_change_the_question_on_reparse(self):
+        # Demonstrates the actual failure this check exists to prevent:
+        # bypass validation (the same way parse_deck's own `validate=False`
+        # path does, e.g. for a hand-edited file scenario) to see what a
+        # line separator embedded in a deck file actually becomes on parse.
+        # The text `add` would have written is not the text a later parse
+        # reads back — exactly the "looks the same, isn't" gap this check
+        # closes for every other caller.
+        text = "Q: before after\nA: answer\n"
+        cards = parse_deck(text, validate=False)
+        self.assertEqual(len(cards), 1)
+        self.assertNotEqual(cards[0].question, "before after")
+        self.assertEqual(cards[0].question, "before\nafter")
+
     def test_emoji_sequence_with_zero_width_joiner_is_fine(self):
         # ZWJ-joined emoji sequences (e.g. family/skin-tone emoji) and
         # variation selectors are in the same Unicode "format" category as

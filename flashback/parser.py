@@ -32,6 +32,14 @@ BIDI_FORMATTING_CLASSES = frozenset(
     {"LRE", "RLE", "LRO", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI"}
 )
 
+# Unicode's own LINE SEPARATOR (U+2028) and PARAGRAPH SEPARATOR (U+2029).
+# Neither is in the Cc ("control") category — unicodedata.category() reports
+# them as Zl/Zp — so the control-character check in _check_card_text doesn't
+# catch them. But str.splitlines(), which _parse_card (and the line-based
+# checks just below) both use to find line boundaries, treats them exactly
+# like a real "\n". See _check_card_text for the consequence.
+LINE_SEPARATOR_CHARS = frozenset({" ", " "})
+
 
 def normalize_question(question: str) -> str:
     """Normalize a question to NFC so it compares equal regardless of how its
@@ -187,6 +195,22 @@ def _check_card_text(question: str, answer: str) -> None:
     rely on are all Cf too — so this checks Unicode's narrower
     Bidi_Class property instead, which isolates just the
     embedding/override/isolate controls responsible for reordering.
+
+    A third, similarly distinct case: Unicode's own LINE SEPARATOR (U+2028)
+    and PARAGRAPH SEPARATOR (U+2029) aren't control characters either (so
+    the Cc check doesn't catch them) and don't reorder anything (so the Bidi
+    check doesn't either) — but every place this module finds line
+    boundaries (`_parse_card`, and the loop just above this one) does so
+    with `str.splitlines()`, which treats U+2028/U+2029 exactly like a real
+    "\n". A question or answer containing one therefore parses fine and
+    writes cleanly here, then silently reads back differently on the very
+    next parse — split into an extra "line" that becomes part of the stored
+    question/answer via a real newline the card never actually had — the
+    same "looks the same, isn't" gap the NFC-normalization check on
+    questions elsewhere in this module exists to close, just for line
+    boundaries instead of accented characters. Copy-pasting text from a word
+    processor or PDF (common sources of U+2028 line breaks) is enough to hit
+    this without typing anything unusual.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -216,6 +240,13 @@ def _check_card_text(question: str, answer: str) -> None:
                     f"{field_name} contains a bidirectional-formatting character (U+"
                     f"{ord(ch):04X}), which can reorder how surrounding text is displayed on "
                     "screen — not allowed in card text"
+                )
+            if ch in LINE_SEPARATOR_CHARS:
+                raise ParseError(
+                    f"{field_name} contains a Unicode line/paragraph separator (U+"
+                    f"{ord(ch):04X}), which flashback's parser treats as a line break just "
+                    "like a real newline — this would silently change the card's stored text "
+                    "on the next sync"
                 )
 
 
