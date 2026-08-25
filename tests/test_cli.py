@@ -1121,6 +1121,25 @@ class TestHardCommand(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("run `flashback sync`", out)
 
+    def test_hard_does_not_claim_no_decks_yet_for_a_deck_synced_with_zero_cards(self):
+        # A deck synced with zero cards has a row in `decks` but none in
+        # `cards`. `stats`/`known_decks`/`prune_missing_decks` already treat
+        # that as a real, synced deck (session 97) — `hard` must too.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "empty.md").write_text("", encoding="utf-8")
+        rc, sync_out = self.capture("sync")
+        self.assertEqual(rc, 0)
+        self.assertIn("empty: 0 cards (0 new, 0 removed)", sync_out)
+
+        rc, stats_out = self.capture("stats")
+        self.assertEqual(rc, 0)
+        self.assertTrue(any(line.startswith("empty") for line in stats_out.splitlines()))
+
+        rc, out = self.capture("hard")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("no decks yet", out)
+        self.assertIn("nothing looks hard yet", out)
+
     def test_hard_respects_the_deck_filter(self):
         self.run_flashback("add", "astro", "-q", "metallicity?", "-a", "not H or He")
         self.run_flashback("add", "french", "-q", "le fauteuil?", "-a", "armchair")

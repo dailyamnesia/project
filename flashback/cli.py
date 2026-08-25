@@ -490,13 +490,19 @@ def _print_hard_group(rows, limit, detail):
 def cmd_hard(args):
     today = date.today()
     with open_db(_db_path(args)) as conn:
-        total = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+        # Read deck existence from `decks`, not `SELECT COUNT(*) FROM cards`:
+        # a deck synced with zero cards has a `decks` row but no `cards`
+        # rows, so counting `cards` alone can't tell "nothing synced yet"
+        # from "the only synced deck happens to be card-less" — the same
+        # distinction `stats`, `known_decks`, and `prune_missing_decks`
+        # already draw correctly (session 97).
+        no_decks_yet = not known_decks(conn)
         error = _check_deck_filter(conn, args.deck)
         if error:
             print(f"error: {error}", file=sys.stderr)
             return 1
         rows = hard_cards(conn, args.deck)
-    if not total:
+    if no_decks_yet:
         print("no decks yet. run `flashback sync` first.")
         return 0
     if not rows:
