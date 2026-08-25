@@ -98,6 +98,13 @@ question does not — `flashback sync` treats it as a new card and drops the
 old history, same as a `remove` + `add` would, since review history is
 keyed on the question text.
 
+One CLI gotcha, not a `flashback` limitation but worth knowing: if a
+question or answer text itself starts with a dash — memorizing a CLI flag
+like `--verbose`, say — passing it as `-a "--verbose"` gets read as another
+option rather than the answer text, and argparse's own generic error won't
+explain why. Use `-a=--verbose` (the `=` form) instead, or just leave the
+flag off and answer the prompt, both of which work fine.
+
 ## Deck file format
 
 A deck is a markdown file with one or more cards, separated by a line of
