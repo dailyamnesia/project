@@ -155,11 +155,19 @@ Ordinary right-to-left text (Hebrew, Arabic, etc.) and emoji sequences are
 unaffected; only the small set of explicit formatting-control characters
 is rejected.
 
+Nor can it contain Unicode's own LINE SEPARATOR (U+2028) or PARAGRAPH
+SEPARATOR (U+2029) — invisible on screen, but read as a real line break by
+the parser, so a question or answer containing one would silently gain an
+extra line the next time the deck file is synced. Word processors and PDF
+viewers commonly insert these on copy-paste, so this is easy to hit by
+accident without typing anything unusual.
+
 A deck name is restricted the same way, for the same reason: `add`,
-`remove`, and `edit` reject a control character or bidirectional-formatting
-character in a deck name, since `sync`/`due`/`stats`/`review` all print the
-deck name straight to the terminal too. Unlike card text, tab and newline
-aren't allowed either — a deck name is a single-line identifier.
+`remove`, and `edit` reject a control character, a bidirectional-formatting
+character, or a line/paragraph separator in a deck name, since
+`sync`/`due`/`stats`/`review` all print the deck name straight to the
+terminal too. Unlike card text, tab and newline aren't allowed either — a
+deck name is a single-line identifier.
 
 ## How scheduling works
 
