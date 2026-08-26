@@ -13,6 +13,7 @@ from typing import Optional
 from . import __version__
 from .parser import (
     BIDI_FORMATTING_CLASSES,
+    LINE_SEPARATOR_CHARS,
     ParseError,
     _check_card_text,
     append_card,
@@ -81,6 +82,13 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     card text, tab and newline aren't given an exception here — a deck name
     is a single-line identifier, and either one already breaks `stats`'s
     tabular layout.
+
+    Unicode's own LINE SEPARATOR/PARAGRAPH SEPARATOR (U+2028/U+2029) have
+    that same "breaks stats's tabular layout" effect as tab/newline — most
+    terminals render them as a line break — but aren't in the Cc category
+    the control-character check above catches (they're Zl/Zp) and don't
+    reorder anything either, so they need their own check, same as
+    `_check_card_text` needs one for question/answer text.
     """
     if "/" in name or "\\" in name or name in (".", ".."):
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
@@ -97,6 +105,12 @@ def _invalid_deck_name(name: str) -> Optional[str]:
                 f"invalid deck name: {name!r} (contains a bidirectional-formatting "
                 f"character U+{ord(ch):04X}, which can reorder how surrounding text "
                 "is displayed on screen)"
+            )
+        if ch in LINE_SEPARATOR_CHARS:
+            return (
+                f"invalid deck name: {name!r} (contains a Unicode line/paragraph "
+                f"separator U+{ord(ch):04X}, which displays as a line break and "
+                "breaks stats's tabular layout)"
             )
     return None
 

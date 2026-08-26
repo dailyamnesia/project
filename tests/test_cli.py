@@ -138,6 +138,22 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_unicode_line_separator_is_rejected(self):
+        # U+2028 (LINE SEPARATOR) isn't a control character (category Zl, not
+        # Cc) and doesn't reorder anything, so neither of _invalid_deck_name's
+        # existing checks catches it — but parser.py's own LINE_SEPARATOR_CHARS
+        # check (used for question/answer text in _check_card_text) exists
+        # precisely because every place this codebase finds line boundaries
+        # treats U+2028 exactly like a real "\n". _invalid_deck_name's own
+        # docstring says a deck name is rejected control characters "since
+        # either one already breaks stats's tabular layout" — U+2028 breaks
+        # that same tabular layout when a terminal renders it as a line
+        # break, so it should be rejected here for the same reason, the same
+        # way it already is for card text.
+        rc = self.run_flashback("add", "evil deck", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_embedded_separator_line_is_rejected_without_writing_file(self):
         # Without this check, this would write successfully (a normal "added"
         # message) but corrupt the file: the embedded "---" reads back as a
