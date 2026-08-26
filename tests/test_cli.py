@@ -59,6 +59,34 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse((self.decks_dir / "spanish.md").exists())
 
+    def test_deck_name_with_differing_unicode_normalization_form_is_the_same_deck(self):
+        # "é" can be spelled as one precomposed codepoint (NFC) or as "e" plus
+        # a combining acute accent (NFD) — both render identically. This is
+        # exactly the case parser.normalize_question exists to handle for
+        # question text (see test_matches_question_with_differing_unicode_
+        # normalization_form in TestRemoveCommand/TestEditCommand below), but
+        # the deck *name* itself — used to build the deck's file path and its
+        # `decks` table row — got no equivalent normalization. Without it,
+        # two "differently-typed" spellings of the same deck name silently
+        # become two different files on disk (byte-for-byte different names,
+        # even though they look identical) and two unrelated decks in the
+        # database, instead of one deck with two cards.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        rc1 = self.run_flashback("add", nfc, "-q", "Q1", "-a", "A1")
+        rc2 = self.run_flashback("add", nfd, "-q", "Q2", "-a", "A2")
+        self.assertEqual(rc1, 0)
+        self.assertEqual(rc2, 0)
+
+        md_files = sorted(self.decks_dir.glob("*.md"))
+        self.assertEqual(
+            len(md_files), 1, f"expected one deck file, got {[f.name for f in md_files]}"
+        )
+        cards = parse_deck(md_files[0].read_text(encoding="utf-8"))
+        self.assertEqual([c.question for c in cards], ["Q1", "Q2"])
+
     def test_question_with_unicode_line_separator_is_rejected(self):
         # U+2028 (LINE SEPARATOR) — a real-world hazard since some word
         # processors and PDF viewers insert it for soft line breaks on

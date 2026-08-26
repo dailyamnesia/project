@@ -57,6 +57,31 @@ def _db_path(args) -> Path:
     return Path(args.state_dir) / "state.sqlite3"
 
 
+def _normalize_deck_name(name: str) -> str:
+    """NFC-normalize a deck name, the same way `parser.normalize_question` treats
+    question text, and for the same reason: a deck name is an identity, not just
+    display text, and Unicode allows some characters two equally valid encodings
+    (e.g. "é" as one precomposed codepoint, or as "e" plus a combining acute
+    accent) that render identically but compare unequal as plain Python strings.
+
+    Without this, two "differently-typed" spellings of the same deck name — both
+    reading, on screen, as exactly the same deck — silently become two different
+    deck files on disk (`decks_dir / f"{name}.md"` differs byte-for-byte even
+    though the two names look identical) and two unrelated rows in the `decks`
+    table, so cards added under one spelling are invisible to `remove`/`edit`/
+    `--deck` lookups made under the other, and `sync`/`stats` list what looks
+    like one deck twice. The exact "looks the same but silently isn't" failure
+    shape `normalize_question` already exists to close for questions, just for
+    deck names instead.
+
+    Applied to every deck name before it's used to build a path, locked, looked
+    up in the database, or compared against one: `add`/`remove`/`edit`'s `deck`
+    argument, `sync`'s deck name recovered from a file's stem, and `due`/
+    `review`/`stats`/`hard`'s `--deck` filter.
+    """
+    return unicodedata.normalize("NFC", name)
+
+
 def _invalid_deck_name(name: str) -> Optional[str]:
     """Return an error message if `name` can't be used as a deck file's stem, else None.
 
@@ -212,7 +237,12 @@ def cmd_sync(args):
         total_added = total_removed = 0
         deck_names = set()
         for deck_file in sorted(decks_dir.glob("*.md")):
-            deck_name = deck_file.stem
+            # NFC-normalized so a deck file whose name happens to be encoded
+            # in a different (but visually identical) Unicode normalization
+            # form than what add/remove/edit would have written still counts
+            # as the same deck identity everywhere else — see
+            # _normalize_deck_name.
+            deck_name = _normalize_deck_name(deck_file.stem)
             # Added to deck_names before the name check below (not after), so
             # a deck that was already synced under this name in a past run
             # doesn't get pruned by prune_missing_decks just because its name
@@ -263,6 +293,7 @@ def cmd_sync(args):
 
 
 def cmd_add(args):
+    args.deck = _normalize_deck_name(args.deck)
     error = _invalid_deck_name(args.deck)
     if error:
         print(f"error: {error}", file=sys.stderr)
@@ -289,6 +320,7 @@ def cmd_add(args):
 
 
 def cmd_remove(args):
+    args.deck = _normalize_deck_name(args.deck)
     error = _invalid_deck_name(args.deck)
     if error:
         print(f"error: {error}", file=sys.stderr)
@@ -319,6 +351,7 @@ def cmd_remove(args):
 
 
 def cmd_edit(args):
+    args.deck = _normalize_deck_name(args.deck)
     error = _invalid_deck_name(args.deck)
     if error:
         print(f"error: {error}", file=sys.stderr)
@@ -444,6 +477,8 @@ def _print_nothing_due(conn, today, deck):
 
 def cmd_due(args):
     today = date.today()
+    if args.deck is not None:
+        args.deck = _normalize_deck_name(args.deck)
     with open_db(_db_path(args)) as conn:
         error = _check_deck_filter(conn, args.deck)
         if error:
@@ -463,6 +498,8 @@ def cmd_due(args):
 
 def cmd_stats(args):
     today = date.today()
+    if args.deck is not None:
+        args.deck = _normalize_deck_name(args.deck)
     with open_db(_db_path(args)) as conn:
         error = _check_deck_filter(conn, args.deck)
         if error:
@@ -503,6 +540,8 @@ def _print_hard_group(rows, limit, detail):
 
 def cmd_hard(args):
     today = date.today()
+    if args.deck is not None:
+        args.deck = _normalize_deck_name(args.deck)
     with open_db(_db_path(args)) as conn:
         # Read deck existence from `decks`, not `SELECT COUNT(*) FROM cards`:
         # a deck synced with zero cards has a `decks` row but no `cards`
@@ -565,6 +604,8 @@ def _streak(count):
 
 def cmd_review(args):
     today = date.today()
+    if args.deck is not None:
+        args.deck = _normalize_deck_name(args.deck)
     with open_db(_db_path(args)) as conn:
         error = _check_deck_filter(conn, args.deck)
         if error:
