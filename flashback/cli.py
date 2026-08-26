@@ -236,6 +236,10 @@ def cmd_sync(args):
     with open_db(_db_path(args)) as conn:
         total_added = total_removed = 0
         deck_names = set()
+        # Maps each deck_name already synced *this run* to the file that was
+        # synced under it, so a second, colliding file (see the check below)
+        # can name the file it lost to instead of just disappearing.
+        synced_from = {}
         for deck_file in sorted(decks_dir.glob("*.md")):
             # NFC-normalized so a deck file whose name happens to be encoded
             # in a different (but visually identical) Unicode normalization
@@ -260,6 +264,30 @@ def cmd_sync(args):
             if name_error is not None:
                 print(f"skipping {deck_file}: {name_error}", file=sys.stderr)
                 continue
+            if deck_name in synced_from:
+                # Two *physically different* files (different bytes on disk,
+                # confirmed distinct by decks_dir.glob returning both) can
+                # each normalize to the same deck_name — e.g. one written
+                # before NFC-normalization existed and one after, or one
+                # just pasted from somewhere with a different composition.
+                # sync_deck's own reconciliation ("delete any card of this
+                # deck not in the file just handed to it") assumes it's the
+                # only source for that deck name in this run; calling it
+                # again under the same name would make it see the first
+                # file's already-inserted cards as leftovers and silently
+                # delete whichever aren't repeated in this second file —
+                # real data loss, not merely a cosmetic double listing.
+                # Skipping the second file avoids that; the first one synced
+                # (by sort order) wins, and this file's cards are picked up
+                # once the collision is resolved by renaming one of them.
+                print(
+                    f"skipping {deck_file}: deck name {deck_name!r} collides with "
+                    f"{synced_from[deck_name]} — both normalize to the same name; "
+                    "rename one of the files so they're distinct decks (or merge them "
+                    "by hand) and sync again",
+                    file=sys.stderr,
+                )
+                continue
             try:
                 cards = parse_deck(deck_file.read_text(encoding="utf-8"))
             except (ParseError, UnicodeDecodeError, OSError) as exc:
@@ -280,6 +308,7 @@ def cmd_sync(args):
             # deck synced earlier in the same run too — even ones that had
             # already printed "N new, M removed" as if it were saved.
             conn.commit()
+            synced_from[deck_name] = deck_file
             total_added += added
             total_removed += removed
             print(f"{deck_name}: {_cards(len(cards))} ({added} new, {removed} removed)")

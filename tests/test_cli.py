@@ -844,6 +844,70 @@ class TestSyncCommand(unittest.TestCase):
             rows = due_cards(conn, date.today())
         self.assertEqual({r["question"] for r in rows}, {"bonjour?"})
 
+    def test_two_deck_files_colliding_after_nfc_normalization_do_not_lose_cards(self):
+        # _normalize_deck_name (added to fix the "two differently-typed
+        # spellings of one deck name become two decks" gap for add/remove/
+        # edit) normalizes whatever deck_file.stem sync finds on disk too.
+        # But sync doesn't only see names it wrote itself — deck files are
+        # documented as normal to hand-create, and two *physically different*
+        # files can each be a differently-normalized spelling of the same
+        # visible name (e.g. one written before this normalization existed,
+        # one after, or one just pasted from somewhere with a different
+        # composition). Both then normalize to the same deck_name and each
+        # used to get its own sync_deck() call under that identical name.
+        # sync_deck's own reconciliation ("delete any card of this deck not
+        # in the file just handed to it") assumes it's the only source for
+        # that deck in this run — called twice for the same name, the second
+        # call saw the first call's already-inserted cards as leftovers and
+        # deleted whichever of them weren't repeated in the second file, even
+        # though both files' "N new, M removed" lines printed as if
+        # everything were saved. sync now refuses to process the second
+        # colliding file at all, rather than silently losing data from the
+        # first.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / f"{nfc}.md").write_text(
+            "Q: nfc-only question\nA: nfc answer\n", encoding="utf-8"
+        )
+        (self.decks_dir / f"{nfd}.md").write_text(
+            "Q: nfd-only question\nA: nfd answer\n", encoding="utf-8"
+        )
+
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+        self.assertIn("collides with", stderr.getvalue())
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = due_cards(conn, date.today())
+        # Exactly one of the two files' cards is synced (whichever sorts
+        # first); the other is skipped rather than being partially merged in
+        # and then clobbered, which would be silent data loss.
+        self.assertEqual(len(rows), 1)
+
+        # Neither file on disk was touched — sync only ever reads deck
+        # files, so both must still contain exactly what they started with,
+        # letting the user resolve the collision by renaming one of them.
+        self.assertIn(
+            "nfc-only question", (self.decks_dir / f"{nfc}.md").read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "nfd-only question", (self.decks_dir / f"{nfd}.md").read_text(encoding="utf-8")
+        )
+
+        # Idempotent: syncing again doesn't flip which file "won" or lose
+        # the one card that's already tracked.
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            rc2 = self.run_flashback("sync")
+        self.assertEqual(rc2, 0)
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows2 = due_cards(conn, date.today())
+        self.assertEqual({r["question"] for r in rows}, {r["question"] for r in rows2})
+
 
 class TestReviewCommand(unittest.TestCase):
     def setUp(self):
