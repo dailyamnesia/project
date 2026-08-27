@@ -255,6 +255,25 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(deck_path.read_text(encoding="utf-8"), before)
 
+    def test_adding_to_a_deck_file_with_a_utf8_bom_succeeds(self):
+        # Notepad and various other editors/export tools default to writing a
+        # UTF-8 byte-order-mark (U+FEFF) at the start of a file. Reading with
+        # plain "utf-8" decodes that BOM as a real character rather than
+        # stripping it, so it lands as the first character of the first
+        # line — turning "Q: hello?" into "﻿Q: hello?", which doesn't
+        # match Q_PREFIX. That used to make _parse_card treat the whole first
+        # card as stray text before any "Q:" line and reject it, so `add`
+        # failed on every deck file saved with a BOM, even though the
+        # content is otherwise perfectly well-formed.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "spanish.md").write_bytes(b"\xef\xbb\xbfQ: hello?\nA: hola\n")
+
+        rc = self.run_flashback("add", "spanish", "-q", "bye?", "-a", "adios")
+        self.assertEqual(rc, 0)
+
+        cards = {c.question: c.answer for c in parse_deck((self.decks_dir / "spanish.md").read_text(encoding="utf-8-sig"))}
+        self.assertEqual(cards, {"hello?": "hola", "bye?": "adios"})
+
     def test_non_utf8_existing_deck_file_fails_cleanly_instead_of_a_raw_traceback(self):
         # `sync` already skips a deck file that isn't valid UTF-8 instead of
         # crashing (session 47) — but `add` reads the *specific* deck file it
@@ -723,6 +742,24 @@ class TestSyncCommand(unittest.TestCase):
         with open_db(self.state_dir / "state.sqlite3") as conn:
             rows = due_cards(conn, date.today())
         self.assertEqual(len(rows), 1)
+
+    def test_deck_file_with_utf8_bom_syncs_normally_instead_of_being_rejected(self):
+        # Same BOM issue as add's equivalent test, hit through sync instead:
+        # a deck file saved with a leading UTF-8 byte-order-mark used to fail
+        # to parse entirely ("card has text before its first 'Q:' line"),
+        # skipping the whole file instead of syncing its (perfectly valid)
+        # card.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "greetings.md").write_bytes(b"\xef\xbb\xbfQ: hello?\nA: hola\n")
+
+        rc, out = self.capture("sync")
+        self.assertEqual(rc, 0)
+        self.assertIn("greetings: 1 card (1 new, 0 removed)", out)
+        self.assertNotIn("skipping", out)
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = due_cards(conn, date.today())
+        self.assertEqual({r["question"] for r in rows}, {"hello?"})
 
     def test_non_utf8_deck_file_is_skipped_not_a_crash(self):
         # A deck file isn't guaranteed to be valid UTF-8 (hand-edited, pasted

@@ -219,9 +219,21 @@ def _read_deck_text(deck_path: Path) -> str:
     traceback exposing local paths, unlike every other user-facing failure in this file.
     Raising ParseError here lets every call site reuse the `except ParseError` handling
     it already has, instead of adding a second, separate except clause at each one.
+
+    `encoding="utf-8-sig"`, not plain `"utf-8"`: Notepad and various other editors and
+    export tools default to writing a UTF-8 byte-order-mark (U+FEFF) at the start of a
+    file. Plain `"utf-8"` decodes that BOM as a real, visible character rather than
+    stripping it, so it lands as the first character of whatever the first line of the
+    file is — silently turning a perfectly well-formed "Q: ..." first line into
+    "﻿Q: ..." from the parser's point of view. That doesn't match `Q_PREFIX`, so
+    `_parse_card` reads it as content *before* the card's first "Q:" line and rejects
+    the whole card, with an error that shows a confusing `﻿` escape instead of
+    naming the actual problem. `"utf-8-sig"` strips a leading BOM if present and
+    otherwise decodes identically to `"utf-8"`, so this is safe for every file, BOM or
+    not.
     """
     try:
-        return deck_path.read_text(encoding="utf-8")
+        return deck_path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ParseError(f"{deck_path} is not valid UTF-8 ({exc})") from exc
 
@@ -289,7 +301,11 @@ def cmd_sync(args):
                 )
                 continue
             try:
-                cards = parse_deck(deck_file.read_text(encoding="utf-8"))
+                # utf-8-sig, not utf-8: strips a leading UTF-8 byte-order-mark if
+                # present (common from Notepad and various editors/export tools)
+                # instead of decoding it as a real character that then reads as
+                # text before the file's first "Q:" line — see _read_deck_text.
+                cards = parse_deck(deck_file.read_text(encoding="utf-8-sig"))
             except (ParseError, UnicodeDecodeError, OSError) as exc:
                 # A deck file that isn't valid UTF-8, or isn't even a regular
                 # file (e.g. a directory happens to match *.md), is the same
