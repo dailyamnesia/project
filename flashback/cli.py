@@ -243,6 +243,18 @@ def cmd_sync(args):
     if not decks_dir.is_dir():
         print(f"no such directory: {decks_dir}", file=sys.stderr)
         return 1
+    # Resolved to an absolute path so the same `--decks-dir` value typed from
+    # two different working directories doesn't look like two different
+    # directories, and so it's stable to store/compare across runs — see
+    # sync_deck/prune_missing_decks for why a deck's *last-synced-from*
+    # directory needs to be recorded and checked at all: a `--state-dir`
+    # shared across more than one `--decks-dir` (nothing stops a user from
+    # doing this, e.g. a copy-pasted command with the wrong `--decks-dir`, or
+    # deliberately pointing `--state-dir` somewhere central) used to let one
+    # decks-dir's sync silently delete another, unrelated decks-dir's cards
+    # the moment their deck names weren't a perfect match, printing "deck
+    # file no longer exists" for files that were never touched.
+    decks_dir_key = str(decks_dir.resolve())
 
     today = date.today()
     with open_db(_db_path(args)) as conn:
@@ -316,7 +328,7 @@ def cmd_sync(args):
                 # deck that's actually broken.
                 print(f"skipping {deck_file}: {exc}", file=sys.stderr)
                 continue
-            added, removed = sync_deck(conn, deck_name, cards, today)
+            added, removed = sync_deck(conn, deck_name, cards, today, decks_dir_key)
             # Commit each deck immediately rather than relying on open_db's
             # single end-of-session commit: an interruption partway through a
             # multi-deck sync (KeyboardInterrupt, a crash on a later deck)
@@ -328,7 +340,7 @@ def cmd_sync(args):
             total_added += added
             total_removed += removed
             print(f"{deck_name}: {_cards(len(cards))} ({added} new, {removed} removed)")
-        pruned = prune_missing_decks(conn, deck_names)
+        pruned = prune_missing_decks(conn, deck_names, decks_dir_key)
         conn.commit()
         for deck_name, count in pruned:
             total_removed += count

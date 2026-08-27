@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS cards (
     last_reviewed TEXT
 );
 CREATE TABLE IF NOT EXISTS decks (
-    name TEXT PRIMARY KEY
+    name TEXT PRIMARY KEY,
+    decks_dir TEXT
 );
 """
 
@@ -74,6 +75,17 @@ def open_db(db_path: Path):
         # (`cards` and `decks`), and Connection.execute rejects more than
         # one statement at a time.
         conn.executescript(SCHEMA)
+        # Migration for a database whose `decks` table predates the
+        # `decks_dir` column (see sync_deck/prune_missing_decks for why it
+        # exists): `CREATE TABLE IF NOT EXISTS` above is a no-op against an
+        # already-existing `decks` table, so an ALTER TABLE is the only way
+        # to get the column onto a database created before this column did.
+        # Existing rows get NULL, same as a fresh row would if a caller ever
+        # inserted without specifying it — see prune_missing_decks for how
+        # NULL is treated (as "unknown", not as a specific directory).
+        existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(decks)")}
+        if "decks_dir" not in existing_columns:
+            conn.execute("ALTER TABLE decks ADD COLUMN decks_dir TEXT")
         # Backfill for a database that already had cards before the `decks`
         # table existed: without this, a deck that's never been re-synced
         # since upgrading has real rows in `cards` but no row in `decks`,
@@ -89,7 +101,7 @@ def open_db(db_path: Path):
         conn.close()
 
 
-def sync_deck(conn, deck: str, cards, today: date):
+def sync_deck(conn, deck: str, cards, today: date, decks_dir: str = None):
     """Insert new cards from a parsed deck, refresh text for existing ones,
     and remove cards no longer present in the deck file.
 
@@ -106,8 +118,16 @@ def sync_deck(conn, deck: str, cards, today: date):
     with "no such deck" — the exact false "you mistyped" that
     `_check_deck_filter` exists to prevent, just triggered by a deck that's
     real but currently card-less instead of one that never existed.
+
+    `decks_dir` (the resolved `--decks-dir` this call's `deck` was actually
+    read from, as cmd_sync passes it) is stamped onto the deck's row every
+    time it's synced, overwriting whatever was there before — see
+    prune_missing_decks for why this matters. It isn't part of a deck's
+    identity (that's still just `deck`, matching `card_id`'s own scoping),
+    only a record of where this deck was last actually seen.
     """
-    conn.execute("INSERT OR IGNORE INTO decks (name) VALUES (?)", (deck,))
+    conn.execute("INSERT OR IGNORE INTO decks (name, decks_dir) VALUES (?, ?)", (deck, decks_dir))
+    conn.execute("UPDATE decks SET decks_dir = ? WHERE name = ?", (decks_dir, deck))
     seen_ids = set()
     added = 0
     for card in cards:
@@ -273,7 +293,7 @@ def record_review(conn, card_row, grade: Grade, today: date):
     return due
 
 
-def prune_missing_decks(conn, existing_deck_names):
+def prune_missing_decks(conn, existing_deck_names, decks_dir: str = None):
     """Delete every card whose deck isn't in `existing_deck_names`; return [(deck, count), ...].
 
     `sync_deck` only reconciles cards *within* a deck it's handed a file for — if a
@@ -290,12 +310,32 @@ def prune_missing_decks(conn, existing_deck_names):
     remembers something the filesystem no longer has" problem this function exists
     to fix for cards, just one layer up. `count` is still whatever `cards` had for
     that deck (zero for a deck that was already card-less).
+
+    `decks_dir` is the resolved `--decks-dir` this run's `existing_deck_names` was
+    actually built from (cmd_sync's own glob). A deck absent from
+    `existing_deck_names` only proves its file is gone from *that* directory — not
+    that the deck is gone at all, if the review database is shared (via a common
+    `--state-dir`) across more than one `--decks-dir`. Without this check, syncing
+    decks-dir B — even one with no deck-name overlap with decks-dir A at all — read
+    as "every deck A has ever synced here is now missing" and deleted all of their
+    cards, printing "deck file no longer exists" for files that were sitting on
+    disk in decks-dir A, untouched, the whole time: a real, silent loss of another
+    directory's review history, triggered by nothing more unusual than one `sync`
+    run against the wrong (or simply a different) `--decks-dir`. A deck whose last
+    recorded `decks_dir` doesn't match this run's is therefore left alone — it's
+    simply out of scope for this run, not gone; only a sync of its own decks_dir
+    can actually confirm that. A NULL `decks_dir` (a deck synced by a version of
+    this database from before this column existed) is treated as a match rather
+    than skipped, so upgrading doesn't change pruning behavior for the common case
+    of a single `--decks-dir` used consistently.
     """
-    rows = conn.execute("SELECT name FROM decks").fetchall()
+    rows = conn.execute("SELECT name, decks_dir FROM decks").fetchall()
     pruned = []
     for row in rows:
         deck = row["name"]
         if deck in existing_deck_names:
+            continue
+        if row["decks_dir"] is not None and row["decks_dir"] != decks_dir:
             continue
         count = conn.execute("SELECT COUNT(*) FROM cards WHERE deck = ?", (deck,)).fetchone()[0]
         conn.execute("DELETE FROM cards WHERE deck = ?", (deck,))

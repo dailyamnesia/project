@@ -304,6 +304,48 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(pruned, [])
             self.assertEqual(len(due_cards(conn, today)), 1)
 
+    def test_prune_missing_decks_does_not_delete_a_deck_synced_from_a_different_decks_dir(self):
+        # Regression test: a review database shared (via a common --state-dir)
+        # across more than one --decks-dir used to have no way to tell "this
+        # deck's file is genuinely gone" apart from "this deck just isn't part
+        # of the --decks-dir being synced right now". Syncing decks-dir B
+        # (with no overlap in deck names with decks-dir A at all) treated every
+        # deck ever synced from A as missing and deleted all of it, even
+        # though A's files were never touched.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "spanish", parse_deck("Q: hello\nA: hola\n"), today, "/decks/A")
+            # Syncing an unrelated decks-dir ("B") that has never heard of
+            # "spanish" must not prune it: "spanish" simply isn't in scope for
+            # this run, it isn't gone.
+            sync_deck(conn, "french", parse_deck("Q: bonjour\nA: hi\n"), today, "/decks/B")
+            pruned = prune_missing_decks(conn, {"french"}, "/decks/B")
+            self.assertEqual(pruned, [])
+            self.assertEqual({r["deck"] for r in due_cards(conn, today)}, {"spanish", "french"})
+
+    def test_prune_missing_decks_still_prunes_within_the_same_decks_dir(self):
+        # The fix above must not make pruning inert: a deck missing from a
+        # sync of its *own* decks-dir is still genuinely gone.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "spanish", parse_deck("Q: hello\nA: hola\n"), today, "/decks/A")
+            pruned = prune_missing_decks(conn, set(), "/decks/A")
+            self.assertEqual(pruned, [("spanish", 1)])
+            self.assertEqual(due_cards(conn, today), [])
+
+    def test_prune_missing_decks_treats_a_null_decks_dir_as_matching_any(self):
+        # A deck synced by a pre-upgrade version of this database (or by a
+        # caller that never passed decks_dir) has no recorded decks_dir at
+        # all. That must not be mistaken for "belongs to some other
+        # directory" -- it has to keep behaving like it did before decks_dir
+        # existed, so upgrading doesn't change pruning for the common case of
+        # a single --decks-dir used consistently.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "spanish", parse_deck("Q: hello\nA: hola\n"), today)
+            pruned = prune_missing_decks(conn, set(), "/decks/A")
+            self.assertEqual(pruned, [("spanish", 1)])
+
     def test_known_decks_includes_a_deck_synced_with_zero_cards(self):
         # Regression test: a deck file that parses fine but has no cards in it
         # (a legitimately empty deck, not a mistake) used to leave no trace at

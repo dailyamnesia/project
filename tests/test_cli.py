@@ -717,6 +717,35 @@ class TestSyncCommand(unittest.TestCase):
         rc = self.run_flashback("due")
         self.assertEqual(rc, 0)
 
+    def test_syncing_a_different_decks_dir_sharing_this_state_dir_does_not_prune_the_first(self):
+        # Regression test: nothing stops --state-dir from being shared across
+        # more than one --decks-dir (a copy-pasted command with the wrong
+        # --decks-dir, or a --state-dir deliberately pointed somewhere
+        # central). Before decks_dir-scoped pruning, syncing decks-dir B --
+        # even one with no deck-name overlap with decks-dir A at all -- made
+        # every deck A had ever synced here look "missing" and deleted all of
+        # it, printing "deck file no longer exists" for a file that was never
+        # touched.
+        other_decks_dir = Path(self._tmp.name) / "other-decks"
+        other_decks_dir.mkdir()
+        (other_decks_dir / "french.md").write_text("Q: bonjour?\nA: hello\n", encoding="utf-8")
+
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+
+        rc, out = self.capture(
+            "--decks-dir", str(other_decks_dir), "--state-dir", str(self.state_dir), "sync"
+        )
+        self.assertEqual(rc, 0)
+        self.assertNotIn("no longer exists", out)
+
+        # spanish.md was never touched, but proving the fix actually means
+        # checking the database, not just the file on disk.
+        self.assertTrue((self.decks_dir / "spanish.md").exists())
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = due_cards(conn, date.today())
+        self.assertEqual({r["deck"] for r in rows}, {"spanish", "french"})
+
     def test_deleted_deck_cards_are_gone_from_due_after_sync(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
         self.run_flashback("add", "french", "-q", "bonjour?", "-a", "hello")
@@ -790,11 +819,11 @@ class TestSyncCommand(unittest.TestCase):
 
         calls = []
 
-        def flaky_sync_deck(conn, deck, cards, today):
+        def flaky_sync_deck(conn, deck, cards, today, decks_dir=None):
             calls.append(deck)
             if len(calls) == 2:
                 raise KeyboardInterrupt("simulated interruption on second deck")
-            return real_sync_deck(conn, deck, cards, today)
+            return real_sync_deck(conn, deck, cards, today, decks_dir)
 
         with patch("flashback.cli.sync_deck", side_effect=flaky_sync_deck):
             # main() catches KeyboardInterrupt itself and exits cleanly with
@@ -823,11 +852,11 @@ class TestSyncCommand(unittest.TestCase):
 
         calls = []
 
-        def flaky_sync_deck(conn, deck, cards, today):
+        def flaky_sync_deck(conn, deck, cards, today, decks_dir=None):
             calls.append(deck)
             if len(calls) == 2:
                 raise sqlite3.OperationalError("database is locked")
-            return real_sync_deck(conn, deck, cards, today)
+            return real_sync_deck(conn, deck, cards, today, decks_dir)
 
         stderr = io.StringIO()
         with patch("flashback.cli.sync_deck", side_effect=flaky_sync_deck):
