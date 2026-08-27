@@ -165,9 +165,9 @@ accident without typing anything unusual.
 A deck name is restricted the same way, for the same reason: `add`,
 `remove`, and `edit` reject a control character, a bidirectional-formatting
 character, or a line/paragraph separator in a deck name, since
-`sync`/`due`/`stats`/`review` all print the deck name straight to the
-terminal too. Unlike card text, tab and newline aren't allowed either — a
-deck name is a single-line identifier.
+`sync`/`due`/`stats`/`review`/`hard` all print the deck name straight to
+the terminal too. Unlike card text, tab and newline aren't allowed either —
+a deck name is a single-line identifier.
 
 ## How scheduling works
 
@@ -199,9 +199,9 @@ next card is due 2026-08-26 (in 6 days).
 the future. If you pass `--deck`, the next date reported is that deck's,
 not the whole collection's.
 
-`due`, `review`, and `hard` all reject a `--deck` name that doesn't match
-any deck you actually have (once you have at least one), rather than
-silently behaving like an empty, caught-up deck:
+`due`, `review`, `stats`, and `hard` all reject a `--deck` name that
+doesn't match any deck you actually have (once you have at least one),
+rather than silently behaving like an empty, caught-up deck:
 
 ```
 $ flashback due --deck itlaian
