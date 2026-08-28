@@ -130,6 +130,29 @@ def _parse_card(block: str) -> Card:
 
     for line in block.splitlines():
         if Q_PREFIX.match(line):
+            if section == "a":
+                # A second 'Q:' line after this block's answer has already
+                # started isn't a continuation of anything — a real card has
+                # exactly one Q:-to-A: transition. Without this check, two
+                # whole cards typed one after another but missing the '---'
+                # separator between them (an easy hand-editing slip, and
+                # exactly what a script or LLM generating deck text is prone
+                # to) silently parse as a *single* card whose "question" is
+                # the two questions joined by a newline and whose "answer" is
+                # the two answers joined the same way — no error, and no
+                # trace of it in sync's success output, the same "silently
+                # corrupts" failure shape `_check_card_text` exists to catch
+                # for content that arrives through add/edit instead of a
+                # hand-edited file. By the time a merged block like that
+                # reaches `_check_card_text`, the literal 'Q:'/'A:' prefixes
+                # that would have tipped it off are already stripped by this
+                # loop, so that check alone can't catch it — this has to be
+                # caught here, while the prefixes are still visible.
+                raise ParseError(
+                    "card has a second 'Q:' line after its answer already started "
+                    f"({line!r}) — this looks like two cards run together because a "
+                    f"'---' separator is missing between them:\n{block}"
+                )
             section = "q"
             question_lines.append(Q_PREFIX.sub("", line, count=1))
         elif A_PREFIX.match(line):

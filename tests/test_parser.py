@@ -51,6 +51,20 @@ class TestParser(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_deck("What is the capital of France?\nQ: (trick question)\nA: Paris\n")
 
+    def test_two_cards_missing_the_separator_between_them_raises_instead_of_merging(self):
+        # Forgetting the '---' between two cards (an easy hand-editing slip,
+        # and exactly the kind of thing a script or LLM generating deck text
+        # can produce) used to silently parse as *one* card: the two
+        # questions joined by a newline, the two answers joined by a newline
+        # — no error, and nothing in sync's success output to hint that two
+        # cards became one. The embedded-'Q:'/'A:'-line check in
+        # _check_card_text can't catch this itself: by the time that check
+        # runs, the second card's 'Q:'/'A:' prefixes have already been
+        # stripped and merged into the first card's fields by _parse_card.
+        text = "Q: first question\nA: first answer\n\nQ: second question\nA: second answer\n"
+        with self.assertRaises(ParseError):
+            parse_deck(text)
+
     def test_duplicate_question_in_same_deck_raises(self):
         text = "Q: hola\nA: hi\n---\nQ: hola\nA: hello (again)\n"
         with self.assertRaises(ParseError):
