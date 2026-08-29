@@ -153,9 +153,50 @@ def _parse_card(block: str) -> Card:
                     f"({line!r}) — this looks like two cards run together because a "
                     f"'---' separator is missing between them:\n{block}"
                 )
+            if section == "q":
+                # A second 'Q:' line while still *inside* the question — not
+                # after an 'A:' has started — is the narrower sibling of the
+                # check just above. A genuine multi-line question whose second
+                # (or later) physical line happens to start with the literal
+                # text "Q:" (e.g. a card about the flashback format itself, or
+                # any question that legitimately continues with a line reading
+                # "Q: ...") matched this same prefix, and — since `section` was
+                # already "q", not "a" — used to fall through with no error at
+                # all: this loop treated it as an ordinary continuation of the
+                # question, but still ran it through `Q_PREFIX.sub`, silently
+                # deleting that line's leading "Q:" from the stored text. The
+                # question read back one "Q:" shorter on every future parse,
+                # with nothing in sync's success output to hint at it — and
+                # unlike the after-'A:' case above, `_check_card_text` can't
+                # catch this one on its own pass either: the evidence (the
+                # leading "Q:") is already gone from the final joined text by
+                # the time that check runs, not just relocated where it can
+                # still be spotted. `add`/`edit` already reject this content
+                # up front for exactly this reason (see
+                # test_new_question_with_embedded_q_prefix_line_raises) — a
+                # hand-edited deck file reaching `parse_deck` deserves the same
+                # protection.
+                raise ParseError(
+                    "card has a second 'Q:' line while its question is still being "
+                    f"read ({line!r}) — if this is meant to be part of the question "
+                    "text rather than a new question, break up the line (e.g. a "
+                    f"leading space) so it doesn't start with 'Q:':\n{block}"
+                )
             section = "q"
             question_lines.append(Q_PREFIX.sub("", line, count=1))
         elif A_PREFIX.match(line):
+            if section == "a":
+                # Same shape, for the answer's own marker: a second 'A:' line
+                # while the answer is already being read silently lost its
+                # leading "A:" the same way a repeated 'Q:' line did above —
+                # e.g. an answer that legitimately continues with a line
+                # reading "A: ..." (documenting the format itself, say).
+                raise ParseError(
+                    "card has a second 'A:' line while its answer is still being "
+                    f"read ({line!r}) — if this is meant to be part of the answer "
+                    "text rather than a new answer, break up the line (e.g. a "
+                    f"leading space) so it doesn't start with 'A:':\n{block}"
+                )
             section = "a"
             answer_lines.append(A_PREFIX.sub("", line, count=1))
         elif section == "q":

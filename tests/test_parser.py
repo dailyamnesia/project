@@ -65,6 +65,38 @@ class TestParser(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_deck(text)
 
+    def test_repeated_q_prefix_line_while_still_reading_the_question_raises(self):
+        # Narrower sibling of the missing-separator check above: a second
+        # 'Q:'-prefixed line while `section` is still "q" (not yet "a") used
+        # to fall through with no error at all, since the guard above only
+        # fires once the answer has already started. A genuine multi-line
+        # question whose second physical line happens to start with the
+        # literal text "Q:" (e.g. a card *about* the flashback format, or any
+        # question that legitimately continues with a line reading "Q: ...")
+        # had that line's leading "Q:" silently deleted by `Q_PREFIX.sub`
+        # instead — the question came back one "Q:" shorter on every future
+        # parse, with nothing in sync's success output to hint at it.
+        # `_check_card_text` can't catch this on its own pass either: unlike
+        # the missing-separator case, the deleted "Q:" isn't just relocated
+        # somewhere else in the final text where that check could still spot
+        # it — it's gone outright. `append_card` already rejects this content
+        # up front (see test_new_question_with_embedded_q_prefix_line_raises
+        # below); a hand-edited deck file reaching `parse_deck` needs the
+        # same protection.
+        text = "Q: line one\nQ: line two, literally about the Q: marker\nA: answer\n"
+        with self.assertRaises(ParseError):
+            parse_deck(text)
+
+    def test_repeated_a_prefix_line_while_still_reading_the_answer_raises(self):
+        # Same shape as the 'Q:' case just above, for the answer's own
+        # marker: a second 'A:' line while the answer is already being read
+        # silently lost its leading "A:" the same way, e.g. an answer that
+        # legitimately continues with a line reading "A: ..." (documenting
+        # the format itself, say).
+        text = "Q: question\nA: line one\nA: line two, literally about the A: marker\n"
+        with self.assertRaises(ParseError):
+            parse_deck(text)
+
     def test_duplicate_question_in_same_deck_raises(self):
         text = "Q: hola\nA: hi\n---\nQ: hola\nA: hello (again)\n"
         with self.assertRaises(ParseError):
