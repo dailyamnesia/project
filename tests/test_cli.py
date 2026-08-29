@@ -1524,5 +1524,99 @@ class TestDeckFilterValidation(unittest.TestCase):
         self.assertTrue(any(line.startswith("full") for line in lines))
 
 
+class TestGlobalDirOptionsPlacement(unittest.TestCase):
+    # `--decks-dir`/`--state-dir` used to be defined only on the top-level
+    # parser, so every other option in this CLI (`-q`, `-a`, `--deck`,
+    # `--limit`) could be typed after the subcommand but these two could
+    # not — argparse rejected them there as "unrecognized arguments", and
+    # `add --help` etc. never even mentioned them. This class covers both
+    # placements, plus the specific regression a naive fix (re-adding the
+    # options to each subparser with their own ordinary defaults) would
+    # introduce: argparse.SubParsersAction copies every attribute of the
+    # post-subcommand namespace onto the outer one, including untouched
+    # defaults, so a value set before the subcommand would be silently
+    # reset back to the default the moment any subcommand ran.
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
+
+    def test_flags_after_subcommand_are_accepted(self):
+        rc = main(
+            [
+                "add",
+                "spanish",
+                "-q",
+                "hello?",
+                "-a",
+                "hola",
+                "--decks-dir",
+                str(self.decks_dir),
+                "--state-dir",
+                str(self.state_dir),
+            ]
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.decks_dir / "spanish.md").exists())
+
+    def test_flags_before_subcommand_still_work(self):
+        rc = main(
+            [
+                "--decks-dir",
+                str(self.decks_dir),
+                "--state-dir",
+                str(self.state_dir),
+                "add",
+                "spanish",
+                "-q",
+                "hello?",
+                "-a",
+                "hola",
+            ]
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.decks_dir / "spanish.md").exists())
+
+    def test_flag_before_subcommand_is_not_silently_reset_to_default(self):
+        # The naive-fix regression guard: giving --decks-dir only before
+        # "add" must not get clobbered by "add"'s own subparser default.
+        from flashback.cli import build_parser
+
+        parser = build_parser()
+        ns = parser.parse_args(
+            ["--decks-dir", str(self.decks_dir), "add", "french", "-q", "hi", "-a", "salut"]
+        )
+        self.assertEqual(ns.decks_dir, str(self.decks_dir))
+
+    def test_mixed_placement_both_take_effect(self):
+        rc = main(
+            [
+                "--decks-dir",
+                str(self.decks_dir),
+                "add",
+                "spanish",
+                "-q",
+                "hello?",
+                "-a",
+                "hola",
+                "--state-dir",
+                str(self.state_dir),
+            ]
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.decks_dir / "spanish.md").exists())
+        self.assertTrue(self.state_dir.exists())
+
+    def test_add_help_documents_shared_dir_options(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            with self.assertRaises(SystemExit):
+                main(["add", "--help"])
+        self.assertIn("--decks-dir", buf.getvalue())
+        self.assertIn("--state-dir", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

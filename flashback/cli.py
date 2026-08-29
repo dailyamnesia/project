@@ -732,23 +732,44 @@ def _non_negative_int(value: str) -> int:
     return parsed
 
 
+def _add_shared_dir_args(parser, *, top_level=False):
+    """Add `--decks-dir`/`--state-dir` to `parser`.
+
+    Every other option in this CLI (`-q`, `-a`, `--deck`, `--limit`) is typed
+    after the subcommand, so these two need to work there as well, not just
+    before it. `argparse.SUBParsersAction` parses the tokens after the
+    subcommand into a fresh namespace and then copies *all* of its
+    attributes onto the outer one, including untouched defaults — so if a
+    subparser copy had its own ordinary default, typing `--decks-dir` only
+    before the subcommand would get silently overwritten by the subparser's
+    default the moment any subcommand ran. `argparse.SUPPRESS` keeps the
+    attribute off the inner namespace entirely unless the user actually types
+    the flag after the subcommand, so a value set before the subcommand
+    survives untouched.
+    """
+    parser.add_argument(
+        "--decks-dir",
+        default="decks" if top_level else argparse.SUPPRESS,
+        help="directory of *.md deck files (default: ./decks)",
+    )
+    parser.add_argument(
+        "--state-dir",
+        default=".flashback" if top_level else argparse.SUPPRESS,
+        help="directory to store review state (default: ./.flashback)",
+    )
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="flashback", description="A plain-text, spaced-repetition flashcard tool."
     )
     parser.add_argument("--version", action="version", version=f"flashback {__version__}")
-    parser.add_argument(
-        "--decks-dir", default="decks", help="directory of *.md deck files (default: ./decks)"
-    )
-    parser.add_argument(
-        "--state-dir",
-        default=".flashback",
-        help="directory to store review state (default: ./.flashback)",
-    )
+    _add_shared_dir_args(parser, top_level=True)
 
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_sync = sub.add_parser("sync", help="load deck files into the review database")
+    _add_shared_dir_args(p_sync)
     p_sync.set_defaults(func=cmd_sync)
 
     p_add = sub.add_parser(
@@ -757,11 +778,13 @@ def build_parser():
     p_add.add_argument("deck", help="deck name (the deck file's stem, e.g. 'spanish-basics')")
     p_add.add_argument("-q", "--question", help="the question (prompted for if omitted)")
     p_add.add_argument("-a", "--answer", help="the answer (prompted for if omitted)")
+    _add_shared_dir_args(p_add)
     p_add.set_defaults(func=cmd_add)
 
     p_remove = sub.add_parser("remove", help="remove a card from a deck file, by question")
     p_remove.add_argument("deck", help="deck name (the deck file's stem, e.g. 'spanish-basics')")
     p_remove.add_argument("-q", "--question", help="the question to remove (prompted for if omitted)")
+    _add_shared_dir_args(p_remove)
     p_remove.set_defaults(func=cmd_remove)
 
     p_edit = sub.add_parser("edit", help="edit a card's question and/or answer in place")
@@ -769,18 +792,22 @@ def build_parser():
     p_edit.add_argument("-q", "--question", help="the question to edit (prompted for if omitted)")
     p_edit.add_argument("--new-question", help="replacement question text (kept as-is if omitted)")
     p_edit.add_argument("--new-answer", help="replacement answer text (kept as-is if omitted)")
+    _add_shared_dir_args(p_edit)
     p_edit.set_defaults(func=cmd_edit)
 
     p_due = sub.add_parser("due", help="show how many cards are due, per deck")
     p_due.add_argument("--deck", help="limit to a single deck")
+    _add_shared_dir_args(p_due)
     p_due.set_defaults(func=cmd_due)
 
     p_review = sub.add_parser("review", help="review due cards")
     p_review.add_argument("--deck", help="limit to a single deck")
+    _add_shared_dir_args(p_review)
     p_review.set_defaults(func=cmd_review)
 
     p_stats = sub.add_parser("stats", help="show per-deck totals")
     p_stats.add_argument("--deck", help="limit to a single deck")
+    _add_shared_dir_args(p_stats)
     p_stats.set_defaults(func=cmd_stats)
 
     p_hard = sub.add_parser("hard", help="show the cards you've found hardest")
@@ -791,6 +818,7 @@ def build_parser():
         default=10,
         help="most cards to show per group (default: 10; 0 for all)",
     )
+    _add_shared_dir_args(p_hard)
     p_hard.set_defaults(func=cmd_hard)
 
     return parser
