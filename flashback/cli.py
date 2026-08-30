@@ -726,7 +726,10 @@ def _non_negative_int(value: str) -> int:
     with no error — a silent divergence between what was typed and what
     happened, for a flag whose whole job is to cap how much gets printed.
     """
-    parsed = int(value)
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be 0 or a positive integer, got {value!r}")
     if parsed < 0:
         raise argparse.ArgumentTypeError(f"must be 0 or a positive integer, got {value!r}")
     return parsed

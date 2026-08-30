@@ -1379,6 +1379,25 @@ class TestHardCommand(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("--limit", stderr.getvalue())
 
+    def test_hard_rejects_a_non_numeric_limit_with_a_clean_message(self):
+        # `--limit`'s `type=` callable (`_non_negative_int`) only wraps the
+        # negative-number case in its own `argparse.ArgumentTypeError`. A
+        # value that isn't a valid integer at all (a typo, e.g. `--limit al`
+        # meant to be `--limit all`) instead lets `int(value)`'s bare
+        # `ValueError` escape uncaught. argparse's own fallback handling for
+        # that turns it into "invalid %s value: %r" % (type_func.__name__, ...)
+        # — since the function is named with a leading underscore as an
+        # internal implementation detail, that leaks "_non_negative_int"
+        # straight into a user-facing error message instead of a clean
+        # description of what was actually expected.
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                self.run_flashback("hard", "--limit", "abc")
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertNotIn("_non_negative_int", stderr.getvalue())
+        self.assertIn("--limit", stderr.getvalue())
+
     def test_stats_counts_the_cards_currently_being_missed(self):
         # Without this the new command is undiscoverable: nothing else in the
         # tool would ever hint that it has something to say.
