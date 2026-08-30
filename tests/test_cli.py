@@ -87,6 +87,29 @@ class TestAddCommand(unittest.TestCase):
         cards = parse_deck(md_files[0].read_text(encoding="utf-8"))
         self.assertEqual([c.question for c in cards], ["Q1", "Q2"])
 
+    def test_deck_name_with_leading_or_trailing_whitespace_is_the_same_deck(self):
+        # _normalize_deck_name NFC-normalized a deck name but never stripped
+        # surrounding whitespace, unlike question/answer text — so a plain
+        # typo like a trailing space ("spanish " instead of "spanish")
+        # silently created a second, unrelated deck file and database row,
+        # rather than being folded into the existing "spanish" deck. Worse
+        # than the Unicode-normalization case: `stats`'s deck-name column is
+        # padded to a fixed width, so "spanish" and "spanish " render as
+        # visually identical rows, making the resulting duplicate look like a
+        # bug in flashback itself rather than a typo in the deck name that
+        # created it.
+        rc1 = self.run_flashback("add", "spanish", "-q", "Q1", "-a", "A1")
+        rc2 = self.run_flashback("add", "spanish ", "-q", "Q2", "-a", "A2")
+        self.assertEqual(rc1, 0)
+        self.assertEqual(rc2, 0)
+
+        md_files = sorted(self.decks_dir.glob("*.md"))
+        self.assertEqual(
+            len(md_files), 1, f"expected one deck file, got {[f.name for f in md_files]}"
+        )
+        cards = parse_deck(md_files[0].read_text(encoding="utf-8"))
+        self.assertEqual([c.question for c in cards], ["Q1", "Q2"])
+
     def test_question_with_unicode_line_separator_is_rejected(self):
         # U+2028 (LINE SEPARATOR) — a real-world hazard since some word
         # processors and PDF viewers insert it for soft line breaks on

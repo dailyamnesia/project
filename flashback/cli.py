@@ -58,11 +58,16 @@ def _db_path(args) -> Path:
 
 
 def _normalize_deck_name(name: str) -> str:
-    """NFC-normalize a deck name, the same way `parser.normalize_question` treats
-    question text, and for the same reason: a deck name is an identity, not just
-    display text, and Unicode allows some characters two equally valid encodings
-    (e.g. "é" as one precomposed codepoint, or as "e" plus a combining acute
-    accent) that render identically but compare unequal as plain Python strings.
+    """Strip surrounding whitespace and NFC-normalize a deck name, the same way
+    question/answer text is treated before it's used as a card's identity, and
+    for the same reason: a deck name is an identity, not just display text.
+    Unicode allows some characters two equally valid encodings (e.g. "é" as one
+    precomposed codepoint, or as "e" plus a combining acute accent) that render
+    identically but compare unequal as plain Python strings — and a trailing
+    space is invisible in terminal output entirely (`stats`'s deck-name column
+    is padded to a fixed width, so "spanish" and "spanish " render as identical
+    text), making it an even easier typo to make unknowingly than a Unicode
+    encoding mismatch.
 
     Without this, two "differently-typed" spellings of the same deck name — both
     reading, on screen, as exactly the same deck — silently become two different
@@ -79,7 +84,7 @@ def _normalize_deck_name(name: str) -> str:
     argument, `sync`'s deck name recovered from a file's stem, and `due`/
     `review`/`stats`/`hard`'s `--deck` filter.
     """
-    return unicodedata.normalize("NFC", name)
+    return unicodedata.normalize("NFC", name.strip())
 
 
 def _invalid_deck_name(name: str) -> Optional[str]:
