@@ -333,18 +333,43 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(pruned, [("spanish", 1)])
             self.assertEqual(due_cards(conn, today), [])
 
-    def test_prune_missing_decks_treats_a_null_decks_dir_as_matching_any(self):
+    def test_prune_missing_decks_never_prunes_a_null_decks_dir_deck(self):
         # A deck synced by a pre-upgrade version of this database (or by a
         # caller that never passed decks_dir) has no recorded decks_dir at
-        # all. That must not be mistaken for "belongs to some other
-        # directory" -- it has to keep behaving like it did before decks_dir
-        # existed, so upgrading doesn't change pruning for the common case of
-        # a single --decks-dir used consistently.
+        # all -- meaning its *real* originating directory is unknown, not
+        # that it matches every directory. Treating NULL as "matches any"
+        # (an earlier version of this function did) reintroduces exactly the
+        # cross-directory data loss the decks_dir column exists to prevent,
+        # for anyone upgrading from before the column existed: right after
+        # the ALTER TABLE migration every pre-existing deck's decks_dir is
+        # NULL regardless of which --decks-dir it actually came from, so the
+        # first post-upgrade sync of any one of them would delete every
+        # other directory's still-NULL decks too. A NULL-decks_dir deck must
+        # stay untouched here -- it only becomes prunable once it's synced
+        # again for real and gets a concrete decks_dir stamped onto it.
         today = date(2026, 1, 1)
         with open_db(self.db_path) as conn:
             sync_deck(conn, "spanish", parse_deck("Q: hello\nA: hola\n"), today)
             pruned = prune_missing_decks(conn, set(), "/decks/A")
-            self.assertEqual(pruned, [("spanish", 1)])
+            self.assertEqual(pruned, [])
+            self.assertEqual(len(due_cards(conn, today)), 1)
+
+    def test_prune_missing_decks_does_not_delete_another_directorys_deck_across_an_upgrade(self):
+        # Regression test for the exact bug the fix above closes. Simulate a
+        # database from before the decks_dir column existed: two decks, each
+        # really from a different --decks-dir, both recorded with a NULL
+        # decks_dir since neither was ever synced under code that knew to
+        # stamp one. The first post-upgrade sync of just one of those
+        # directories must not delete the other's deck merely because it
+        # isn't in *this* run's file list -- it was never in scope for this
+        # run to begin with.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "spanish", parse_deck("Q: hello\nA: hola\n"), today)  # really from /decks/A
+            sync_deck(conn, "french", parse_deck("Q: bonjour\nA: hi\n"), today)   # really from /decks/B
+            pruned = prune_missing_decks(conn, {"spanish"}, "/decks/A")
+            self.assertEqual(pruned, [])
+            self.assertEqual({r["deck"] for r in due_cards(conn, today)}, {"spanish", "french"})
 
     def test_known_decks_includes_a_deck_synced_with_zero_cards(self):
         # Regression test: a deck file that parses fine but has no cards in it

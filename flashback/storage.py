@@ -324,10 +324,28 @@ def prune_missing_decks(conn, existing_deck_names, decks_dir: str = None):
     run against the wrong (or simply a different) `--decks-dir`. A deck whose last
     recorded `decks_dir` doesn't match this run's is therefore left alone — it's
     simply out of scope for this run, not gone; only a sync of its own decks_dir
-    can actually confirm that. A NULL `decks_dir` (a deck synced by a version of
-    this database from before this column existed) is treated as a match rather
-    than skipped, so upgrading doesn't change pruning behavior for the common case
-    of a single `--decks-dir` used consistently.
+    can actually confirm that.
+
+    A NULL `decks_dir` (a deck synced by a version of this database from before
+    this column existed) requires an exact match too, i.e. is *never* pruned here
+    until it's been seen by a real sync under the current code and had a concrete
+    `decks_dir` stamped onto it. Treating NULL as an automatic match (an earlier
+    version of this function did) reintroduces the exact bug this whole function
+    exists to fix, for anyone upgrading from before this column existed: right
+    after the `ALTER TABLE` migration, *every* pre-existing deck's `decks_dir` is
+    NULL, indistinguishable from each other regardless of which `--decks-dir` each
+    one actually came from — so the first post-upgrade sync of any one
+    `--decks-dir` sharing that `--state-dir` would treat every other decks-dir's
+    still-NULL decks as "belongs to me, and it's missing" and delete them, the
+    identical cross-directory data loss the `decks_dir` column was added to
+    prevent, just delayed until the moment a pre-existing database crosses the
+    upgrade instead of requiring one. Erring toward "leave a NULL-`decks_dir` deck
+    alone" costs a genuinely-deleted deck (file removed *before* ever being
+    re-synced under a version of the code that records `decks_dir`) a pruning it
+    would otherwise get automatically — it stays visible until synced again from
+    its real original directory (which stamps a concrete value and makes it
+    provably prunable from then on) — a strictly smaller, recoverable annoyance
+    next to silently destroying another directory's review history outright.
     """
     rows = conn.execute("SELECT name, decks_dir FROM decks").fetchall()
     pruned = []
@@ -335,7 +353,7 @@ def prune_missing_decks(conn, existing_deck_names, decks_dir: str = None):
         deck = row["name"]
         if deck in existing_deck_names:
             continue
-        if row["decks_dir"] is not None and row["decks_dir"] != decks_dir:
+        if row["decks_dir"] != decks_dir:
             continue
         count = conn.execute("SELECT COUNT(*) FROM cards WHERE deck = ?", (deck,)).fetchone()[0]
         conn.execute("DELETE FROM cards WHERE deck = ?", (deck,))
