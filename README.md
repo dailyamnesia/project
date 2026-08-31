@@ -126,11 +126,13 @@ is the answer, until the next card. One file = one deck; the filename
 (minus `.md`) is the deck's name.
 
 Two cards with the identical question text *within the same deck file*
-aren't allowed — `add` rejects it up front, and `sync` will refuse to load
-a deck file that already has one (e.g. from hand-editing), rather than
-silently keeping only one of them. The same question text in *different*
-decks is fine and intentional: each deck is its own context, so those are
-treated as two independent cards with independent schedules.
+aren't allowed — `add` rejects it up front, `edit` rejects it too if a
+`--new-question` would collide with another card already in the deck, and
+`sync` will refuse to load a deck file that already has one (e.g. from
+hand-editing), rather than silently keeping only one of them. The same
+question text in *different* decks is fine and intentional: each deck is
+its own context, so those are treated as two independent cards with
+independent schedules.
 
 Since `Q:`, `A:`, and a line of three-or-more dashes are how the format
 finds card boundaries, a question or answer can't itself contain a line
