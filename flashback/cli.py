@@ -145,6 +145,46 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     return None
 
 
+def _find_deck_path(decks_dir: Path, deck_name: str) -> Path:
+    """Return the on-disk file backing `deck_name` (already `_normalize_deck_name`d), the
+    same way `sync` finds it, instead of just guessing `decks_dir / f"{deck_name}.md"`.
+
+    A deck file isn't guaranteed to already be named in NFC, even though `deck_name` always
+    is by the time it reaches here: deck files are documented as normal to hand-create or
+    hand-rename outside the CLI (see `cmd_sync`'s handling of a hand-created, oddly-named
+    file), and a normalization-happy filesystem such as macOS's (HFS+/APFS) stores accented
+    file names as NFD by default — a byte-for-byte NFD name that survives a `git clone` onto
+    a normalization-preserving filesystem like Linux's completely untouched, since git stores
+    file names as literal bytes either way.
+
+    `cmd_sync` already normalizes `deck_file.stem` (see `_normalize_deck_name`) before using
+    it as the deck's identity, so `due`/`stats`/`review`/`hard` all correctly show such a
+    deck as existing and populated. Guessing the path from `deck_name` alone, as `add`/
+    `remove`/`edit` used to, only ever matches a file that already happens to be NFC-named —
+    against an NFD-named one it matches nothing, so `remove`/`edit` wrongly reported "no such
+    deck" for a deck `stats` had just shown as real, and `add` (which creates a file when none
+    is found) went ahead and silently wrote a *second*, colliding file next to the first —
+    exactly the "two files, one deck name" collision `sync` otherwise refuses to merge and
+    warns about, just self-inflicted here, with the new card silently dropped from every sync
+    thereafter (the losing file of a collision is skipped, not merged) and no hint in `add`'s
+    own cheerful success message that anything went wrong.
+
+    Searches the same `decks_dir.glob("*.md")` sync itself iterates, in the same sorted
+    order, so the file this returns for a (rare, already-warned-about) collision between two
+    physically different files that both normalize to `deck_name` is the same one sync
+    treats as canonical — not some other, arbitrary pick.
+
+    Falls back to the plain NFC-guessed path when no existing file matches: a deck that
+    genuinely doesn't exist yet (or `decks_dir` itself doesn't exist yet). `add` uses that
+    path to create the new file; `remove`/`edit` use it only to report where they looked.
+    """
+    if decks_dir.is_dir():
+        for candidate in sorted(decks_dir.glob("*.md")):
+            if _normalize_deck_name(candidate.stem) == deck_name:
+                return candidate
+    return decks_dir / f"{deck_name}.md"
+
+
 def _atomic_write_text(path: Path, data: str) -> None:
     """Replace `path`'s content with `data` without ever leaving it truncated.
 
@@ -362,8 +402,8 @@ def cmd_add(args):
         return 1
 
     decks_dir = Path(args.decks_dir)
+    deck_path = _find_deck_path(decks_dir, args.deck)
     decks_dir.mkdir(parents=True, exist_ok=True)
-    deck_path = decks_dir / f"{args.deck}.md"
 
     question = args.question if args.question is not None else input("Q: ")
     answer = args.answer if args.answer is not None else input("A: ")
@@ -389,7 +429,7 @@ def cmd_remove(args):
         return 1
 
     decks_dir = Path(args.decks_dir)
-    deck_path = decks_dir / f"{args.deck}.md"
+    deck_path = _find_deck_path(decks_dir, args.deck)
     if not deck_path.exists():
         print(f"no such deck: {deck_path}", file=sys.stderr)
         return 1
@@ -420,7 +460,7 @@ def cmd_edit(args):
         return 1
 
     decks_dir = Path(args.decks_dir)
-    deck_path = decks_dir / f"{args.deck}.md"
+    deck_path = _find_deck_path(decks_dir, args.deck)
     if not deck_path.exists():
         print(f"no such deck: {deck_path}", file=sys.stderr)
         return 1

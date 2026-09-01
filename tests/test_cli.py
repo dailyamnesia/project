@@ -87,6 +87,39 @@ class TestAddCommand(unittest.TestCase):
         cards = parse_deck(md_files[0].read_text(encoding="utf-8"))
         self.assertEqual([c.question for c in cards], ["Q1", "Q2"])
 
+    def test_add_finds_an_existing_deck_file_named_in_a_different_unicode_normalization_form(self):
+        # A deck file isn't only ever created by `add` itself (which always
+        # normalizes the name it writes to NFC) -- deck files are documented
+        # as normal to hand-create outside the CLI, and a normalization-happy
+        # filesystem such as macOS's (HFS+/APFS) stores accented file names
+        # as NFD by default, a byte-for-byte NFD name that survives a `git
+        # clone` onto Linux untouched. `sync` already recognizes such a file
+        # as the deck it normalizes to (see TestSyncCommand), but `add` used
+        # to guess the deck's path as decks_dir / f"{normalized_name}.md" --
+        # which, against an NFD-named file, matches nothing, so `add` treated
+        # a real, populated deck as brand new and created a *second*,
+        # colliding file next to the first instead of appending to it. The
+        # new card then silently vanishes from every future `sync` (the
+        # collision-detection added for hand-created files causes the losing
+        # file to be skipped every run), with a cheerful "added to ..."
+        # message giving no hint that anything went wrong.
+        nfd = unicodedata.normalize("NFD", "café")
+        nfc = unicodedata.normalize("NFC", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / f"{nfd}.md").write_text("Q: hola?\nA: hello\n", encoding="utf-8")
+
+        rc = self.run_flashback("add", nfc, "-q", "adios?", "-a", "goodbye")
+        self.assertEqual(rc, 0)
+
+        md_files = sorted(self.decks_dir.glob("*.md"))
+        self.assertEqual(
+            len(md_files), 1, f"expected one deck file, got {[f.name for f in md_files]}"
+        )
+        cards = parse_deck(md_files[0].read_text(encoding="utf-8"))
+        self.assertEqual([c.question for c in cards], ["hola?", "adios?"])
+
     def test_deck_name_with_leading_or_trailing_whitespace_is_the_same_deck(self):
         # _normalize_deck_name NFC-normalized a deck name but never stripped
         # surrounding whitespace, unlike question/answer text — so a plain
@@ -406,6 +439,43 @@ class TestRemoveCommand(unittest.TestCase):
         deck_path = self.decks_dir / "spanish.md"
         self.assertEqual(parse_deck(deck_path.read_text(encoding="utf-8")), [])
 
+    def test_finds_deck_file_whose_on_disk_name_is_a_different_unicode_normalization_form(self):
+        # A deck's *file name* isn't guaranteed to already be NFC, even though
+        # _normalize_deck_name always normalizes the --deck argument to NFC
+        # before it's used: deck files are documented as normal to hand-create
+        # or hand-rename outside the CLI (see the control-character-named-file
+        # test in TestSyncCommand), and macOS's filesystem (HFS+/APFS) stores
+        # accented file names as NFD by default — a byte-for-byte NFD name
+        # that survives a `git clone` onto Linux untouched, since git stores
+        # file names as literal bytes. `sync` already normalizes
+        # `deck_file.stem` before using it as the deck's identity, so `stats`/
+        # `due`/`review`/`hard` all correctly show such a deck as existing and
+        # populated. `remove` has to find the same file `sync` found — not
+        # just guess `decks_dir / f"{normalized_name}.md"`, which only ever
+        # matches a file that's already NFC and reports a false "no such
+        # deck" against one that plainly does exist (`stats` just said so).
+        nfd = unicodedata.normalize("NFD", "café")
+        nfc = unicodedata.normalize("NFC", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / f"{nfd}.md").write_text("Q: hola?\nA: hello\n", encoding="utf-8")
+        rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+
+        # Confirm sync really does treat this as an existing, populated deck
+        # (the premise of the bug: remove disagreeing with sync/stats).
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            self.assertEqual(len(due_cards(conn, date.today())), 1)
+
+        rc = self.run_flashback("remove", nfc, "-q", "hola?")
+        self.assertEqual(rc, 0)
+
+        cards = parse_deck((self.decks_dir / f"{nfd}.md").read_text(encoding="utf-8"))
+        self.assertEqual(cards, [])
+        # No second, colliding file should have been created.
+        self.assertEqual([p.name for p in self.decks_dir.glob("*.md")], [f"{nfd}.md"])
+
     def test_removes_unrelated_card_despite_a_poisoned_card_hand_edited_into_the_deck(self):
         # A control character typed straight into the deck file (bypassing
         # add/edit's own checks entirely) used to block remove of any other,
@@ -537,6 +607,32 @@ class TestEditCommand(unittest.TestCase):
         deck_path = self.decks_dir / "spanish.md"
         cards = parse_deck(deck_path.read_text(encoding="utf-8"))
         self.assertEqual(cards[0].answer, "coffee")
+
+    def test_finds_deck_file_whose_on_disk_name_is_a_different_unicode_normalization_form(self):
+        # Same gap as remove's equivalent test: `edit` also used to guess the
+        # deck's path as decks_dir / f"{normalized_name}.md" instead of
+        # finding whatever file `sync` actually treats as this deck, so a
+        # deck whose file name happens to already be a different (but
+        # visually identical) Unicode normalization form -- e.g. one hand-
+        # created, or produced by a normalization-happy filesystem such as
+        # macOS's -- was invisible to `edit` even though `sync`/`stats` show
+        # it as a real, populated deck.
+        nfd = unicodedata.normalize("NFD", "café")
+        nfc = unicodedata.normalize("NFC", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / f"{nfd}.md").write_text("Q: hola?\nA: hello\n", encoding="utf-8")
+        rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+
+        rc = self.run_flashback("edit", nfc, "-q", "hola?", "--new-answer", "hi")
+        self.assertEqual(rc, 0)
+
+        cards = parse_deck((self.decks_dir / f"{nfd}.md").read_text(encoding="utf-8"))
+        self.assertEqual(cards[0].answer, "hi")
+        # No second, colliding file should have been created.
+        self.assertEqual([p.name for p in self.decks_dir.glob("*.md")], [f"{nfd}.md"])
 
     def test_new_question_differing_only_in_unicode_normalization_form_does_not_warn_of_reset(self):
         # --new-question is normalized (edit_card -> normalize_question) before
