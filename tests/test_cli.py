@@ -1046,9 +1046,9 @@ class TestSyncCommand(unittest.TestCase):
         # call saw the first call's already-inserted cards as leftovers and
         # deleted whichever of them weren't repeated in the second file, even
         # though both files' "N new, M removed" lines printed as if
-        # everything were saved. sync now refuses to process the second
-        # colliding file at all, rather than silently losing data from the
-        # first.
+        # everything were saved. sync now refuses to sync *either* colliding
+        # file at all (see the sibling test below for why even "one of them,
+        # picked by sort order" isn't safe), rather than silently losing data.
         nfc = unicodedata.normalize("NFC", "café")
         nfd = unicodedata.normalize("NFD", "café")
         self.assertNotEqual(nfc, nfd)
@@ -1065,14 +1065,14 @@ class TestSyncCommand(unittest.TestCase):
         with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
             rc = self.run_flashback("sync")
         self.assertEqual(rc, 0)
-        self.assertIn("collides with", stderr.getvalue())
+        self.assertIn("collide", stderr.getvalue())
 
         with open_db(self.state_dir / "state.sqlite3") as conn:
             rows = due_cards(conn, date.today())
-        # Exactly one of the two files' cards is synced (whichever sorts
-        # first); the other is skipped rather than being partially merged in
-        # and then clobbered, which would be silent data loss.
-        self.assertEqual(len(rows), 1)
+        # Neither file's cards are synced while the collision exists — there
+        # is no safe way to prefer one file over the other, so the deck is
+        # left alone entirely rather than gambling on whichever sorts first.
+        self.assertEqual(len(rows), 0)
 
         # Neither file on disk was touched — sync only ever reads deck
         # files, so both must still contain exactly what they started with,
@@ -1084,14 +1084,76 @@ class TestSyncCommand(unittest.TestCase):
             "nfd-only question", (self.decks_dir / f"{nfd}.md").read_text(encoding="utf-8")
         )
 
-        # Idempotent: syncing again doesn't flip which file "won" or lose
-        # the one card that's already tracked.
+        # Idempotent: syncing again doesn't change anything either.
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             rc2 = self.run_flashback("sync")
         self.assertEqual(rc2, 0)
         with open_db(self.state_dir / "state.sqlite3") as conn:
             rows2 = due_cards(conn, date.today())
-        self.assertEqual({r["question"] for r in rows}, {r["question"] for r in rows2})
+        self.assertEqual(rows2, [])
+
+    def test_a_new_colliding_file_does_not_wipe_an_already_established_decks_cards(self):
+        # The narrower, more serious sibling gap the fix above closes: the
+        # old "first file by sort order wins" rule didn't just mean the
+        # *losing* file's cards were skipped — if the deck already existed
+        # in the database from a previous, ordinary sync, and the file that
+        # happened to sort first this run was a brand-new, unrelated file, a
+        # full sync_deck() reconciliation against that new file's contents
+        # deleted every one of the deck's real, already-established cards
+        # (review history included), even though neither physical file was
+        # ever touched. A deck's actual identity was decided by an arbitrary
+        # Unicode sort order having nothing to do with which file it was
+        # really synced from before.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+        # NFD's combining accent (U+0301) sorts before NFC's precomposed
+        # "é" (U+00E9) as plain code points, so the brand-new NFD file below
+        # is guaranteed to sort first — confirming the exact ordering this
+        # bug depends on, not assuming it.
+        self.assertEqual(sorted([f"{nfc}.md", f"{nfd}.md"])[0], f"{nfd}.md")
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        established = self.decks_dir / f"{nfc}.md"
+        established.write_text(
+            "Q: established question one\nA: answer one\n"
+            "---\n"
+            "Q: established question two\nA: answer two\n",
+            encoding="utf-8",
+        )
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            established_rows = due_cards(conn, date.today())
+        self.assertEqual(
+            {r["question"] for r in established_rows},
+            {"established question one", "established question two"},
+        )
+
+        # A brand-new, unrelated file appears that happens to normalize to
+        # the same deck name and sort before the established file.
+        (self.decks_dir / f"{nfd}.md").write_text(
+            "Q: unrelated new question\nA: unrelated new answer\n", encoding="utf-8"
+        )
+        stderr2 = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr2):
+            rc2 = self.run_flashback("sync")
+        self.assertEqual(rc2, 0)
+        self.assertIn("collide", stderr2.getvalue())
+
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            after_rows = due_cards(conn, date.today())
+        # The established deck's real cards must still be there, untouched —
+        # not replaced by the new file's unrelated content, and not deleted
+        # outright.
+        self.assertEqual(
+            {r["question"] for r in after_rows},
+            {"established question one", "established question two"},
+        )
+
+        # Both files on disk remain exactly as written.
+        self.assertIn("established question one", established.read_text(encoding="utf-8"))
 
 
 class TestReviewCommand(unittest.TestCase):
