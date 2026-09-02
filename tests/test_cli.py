@@ -1309,6 +1309,81 @@ class TestStateDirAccessErrors(unittest.TestCase):
         self.assertEqual(rc, 1)
 
 
+class TestOutputEncodingErrors(unittest.TestCase):
+    """sys.stdout's encoding comes from the environment (locale,
+    PYTHONIOENCODING, a pipe/redirect into something that forces ASCII) —
+    not from flashback. A minimal container image or a plain "C"/"POSIX"
+    locale with no UTF-8 support are both real, reachable ways for stdout to
+    end up unable to encode a perfectly ordinary non-ASCII question,
+    answer, or deck name (café is the running example throughout this
+    codebase's own docstrings). print() raising UnicodeEncodeError in that
+    situation is a ValueError subclass, not an OSError, so main()'s
+    existing OSError handler doesn't catch it — before this test's fix,
+    this crashed with a raw traceback instead of the one-line message every
+    other user-facing failure in this file gets."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
+
+    def run_flashback(self, *args):
+        return main(
+            ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+        )
+
+    def _run_with_ascii_stdout(self, *args):
+        # A TextIOWrapper around an in-memory buffer, explicitly opened with
+        # the 'ascii' codec, reproduces exactly what a restrictive
+        # locale/PYTHONIOENCODING does to the real sys.stdout/sys.stderr —
+        # without needing to spawn a subprocess or touch the real
+        # environment just to exercise this.
+        ascii_stdout = io.TextIOWrapper(io.BytesIO(), encoding="ascii")
+        ascii_stderr = io.TextIOWrapper(io.BytesIO(), encoding="ascii")
+        with redirect_stdout(ascii_stdout), redirect_stderr(ascii_stderr):
+            rc = self.run_flashback(*args)
+            # Nothing written to either stream survives past process exit
+            # in the real CLI, but flushing here is what would surface a
+            # *second* UnicodeEncodeError raised while trying to print this
+            # very error message (e.g. from a non-ASCII character left in
+            # the message itself) — TextIOWrapper buffers by default, so an
+            # un-flushed write can hide that failure from this test.
+            ascii_stdout.flush()
+            ascii_stderr.flush()
+        return rc, ascii_stderr.buffer.getvalue().decode("ascii")
+
+    def test_non_ascii_card_content_on_ascii_stdout_exits_cleanly_on_stats(self):
+        self.run_flashback("add", "café-deck", "-q", "¿Qué tal?", "-a", "Bien, gracias")
+        self.run_flashback("sync")
+
+        rc, stderr = self._run_with_ascii_stdout("stats")
+
+        self.assertEqual(rc, 1)
+        self.assertIn("couldn't print", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_non_ascii_card_content_on_ascii_stdout_exits_cleanly_on_due(self):
+        self.run_flashback("add", "café-deck", "-q", "¿Qué tal?", "-a", "Bien, gracias")
+        self.run_flashback("sync")
+
+        rc, stderr = self._run_with_ascii_stdout("due")
+
+        self.assertEqual(rc, 1)
+        self.assertIn("couldn't print", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_non_ascii_deck_name_on_ascii_stdout_exits_cleanly_on_sync(self):
+        self.decks_dir.mkdir(parents=True)
+        (self.decks_dir / "café.md").write_text("Q: q1?\nA: a1\n", encoding="utf-8")
+
+        rc, stderr = self._run_with_ascii_stdout("sync")
+
+        self.assertEqual(rc, 1)
+        self.assertIn("couldn't print", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+
 class TestNextDueReporting(unittest.TestCase):
     """`due`/`review`/`stats` should say when the next card actually comes back.
 

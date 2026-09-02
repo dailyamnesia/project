@@ -902,6 +902,43 @@ def main(argv=None):
         # names the offending path.
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except UnicodeEncodeError as exc:
+        # Card/deck text is checked for control characters and bidi
+        # overrides before it's ever written (parser._check_card_text,
+        # _invalid_deck_name) — but neither check (nor anything else in this
+        # codebase) has any way to know what *encoding* stdout will actually
+        # be using at print() time. That comes from the environment (locale,
+        # PYTHONIOENCODING, a pipe or redirect into something that forces
+        # ASCII) — a minimal container image or a plain "C"/"POSIX" locale
+        # with no UTF-8 support are both common, real ways to end up here —
+        # not from anything flashback controls. A perfectly ordinary
+        # non-ASCII question, answer, or deck name (café is the running
+        # example throughout this codebase's own docstrings) is exactly the
+        # legitimate content this tool is designed to support, yet printing
+        # it — in `add`'s own confirmation, `sync`, `due`, `stats`, `review`,
+        # `hard`, or even an error message that echoes the offending text
+        # back via repr() — crashed with a raw traceback instead of the
+        # one-line message every other user-facing failure in this file
+        # gets. `UnicodeEncodeError` is a `ValueError` subclass, not an
+        # `OSError`, so the handler just above this one never caught it.
+        # Like the sqlite3.Error case below, some of this command's output
+        # may already be on the screen above this message — printing partway
+        # through a multi-deck `sync`/`stats` run before hitting the one
+        # deck whose name or content doesn't survive this stream's encoding
+        # is a real, reachable sequence, not a hypothetical.
+        # This message must itself be pure ASCII: it prints on the exact
+        # stream that was just proven unable to encode something, so any
+        # non-ASCII character here (an em dash, a curly quote) would trip
+        # the identical UnicodeEncodeError right back, one frame up, with
+        # nothing to catch it there.
+        print(
+            f"error: couldn't print card/deck text to the terminal ({exc}). "
+            "this looks like an encoding limitation of the current terminal "
+            "or output, not a problem with the content itself - try running "
+            "with a UTF-8 locale (or PYTHONIOENCODING=utf-8).",
+            file=sys.stderr,
+        )
+        return 1
     except sqlite3.Error as exc:
         # This handler wraps *all* of args.func(args), not just open_db's own
         # connect() — sync/review/hard all keep using the connection well
