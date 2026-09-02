@@ -120,6 +120,37 @@ class TestAddCommand(unittest.TestCase):
         cards = parse_deck(md_files[0].read_text(encoding="utf-8"))
         self.assertEqual([c.question for c in cards], ["hola?", "adios?"])
 
+    def test_add_refuses_when_deck_name_collides_between_two_physical_files(self):
+        # `cmd_sync` already refuses to touch a deck when two physically
+        # different files both normalize to the same deck name (session 155)
+        # rather than gamble on which one is "real". `_find_deck_path` picks
+        # the first (sort-order) match regardless, and `add` used to trust
+        # that pick blindly: it silently wrote the new card into whichever
+        # file sorted first -- which could easily be a throwaway or unrelated
+        # file, not the deck's real, already-established one -- with a
+        # cheerful "added to ..." message giving no hint that a second,
+        # colliding file even existed.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        established = self.decks_dir / f"{nfc}.md"
+        established.write_text("Q: uno\nA: one\n", encoding="utf-8")
+        other = self.decks_dir / f"{nfd}.md"
+        other.write_text("Q: tres\nA: three\n", encoding="utf-8")
+
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            rc = self.run_flashback("add", nfc, "-q", "cuatro?", "-a", "four")
+        self.assertEqual(rc, 1)
+        self.assertIn("collide", stderr.getvalue())
+
+        # Neither file was touched -- not the established one, and not the
+        # colliding one either, since there's no way to tell which is real.
+        self.assertEqual(established.read_text(encoding="utf-8"), "Q: uno\nA: one\n")
+        self.assertEqual(other.read_text(encoding="utf-8"), "Q: tres\nA: three\n")
+
     def test_deck_name_with_leading_or_trailing_whitespace_is_the_same_deck(self):
         # _normalize_deck_name NFC-normalized a deck name but never stripped
         # surrounding whitespace, unlike question/answer text — so a plain
@@ -476,6 +507,35 @@ class TestRemoveCommand(unittest.TestCase):
         # No second, colliding file should have been created.
         self.assertEqual([p.name for p in self.decks_dir.glob("*.md")], [f"{nfd}.md"])
 
+    def test_remove_refuses_when_deck_name_collides_between_two_physical_files(self):
+        # Same collision `cmd_sync` already refuses to touch (session 155),
+        # reached through `remove` instead: `_find_deck_path` used to pick
+        # whichever of the two colliding files sorted first regardless, so
+        # `remove` could silently report success while editing a file that
+        # had nothing to do with the deck's real, already-established cards
+        # -- or, as reproduced here, fail with a false "no card with that
+        # question found" for a question that's really there, just in the
+        # *other* colliding file.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        established = self.decks_dir / f"{nfc}.md"
+        established.write_text("Q: uno\nA: one\n", encoding="utf-8")
+        other = self.decks_dir / f"{nfd}.md"
+        other.write_text("Q: tres\nA: three\n", encoding="utf-8")
+
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            rc = self.run_flashback("remove", nfc, "-q", "uno")
+        self.assertEqual(rc, 1)
+        self.assertIn("collide", stderr.getvalue())
+
+        # Neither file was touched.
+        self.assertEqual(established.read_text(encoding="utf-8"), "Q: uno\nA: one\n")
+        self.assertEqual(other.read_text(encoding="utf-8"), "Q: tres\nA: three\n")
+
     def test_removes_unrelated_card_despite_a_poisoned_card_hand_edited_into_the_deck(self):
         # A control character typed straight into the deck file (bypassing
         # add/edit's own checks entirely) used to block remove of any other,
@@ -633,6 +693,34 @@ class TestEditCommand(unittest.TestCase):
         self.assertEqual(cards[0].answer, "hi")
         # No second, colliding file should have been created.
         self.assertEqual([p.name for p in self.decks_dir.glob("*.md")], [f"{nfd}.md"])
+
+    def test_edit_refuses_when_deck_name_collides_between_two_physical_files(self):
+        # Same collision `cmd_sync` already refuses to touch (session 155),
+        # reached through `edit` instead: `_find_deck_path` used to silently
+        # pick whichever of the two colliding files sorted first, so `edit`
+        # could operate on the wrong file entirely -- reporting "no card with
+        # that question found" for a question that's really there, just in
+        # the other colliding file, or worse, silently editing an unrelated
+        # file's content under the deck's name.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        established = self.decks_dir / f"{nfc}.md"
+        established.write_text("Q: uno\nA: one\n", encoding="utf-8")
+        other = self.decks_dir / f"{nfd}.md"
+        other.write_text("Q: tres\nA: three\n", encoding="utf-8")
+
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            rc = self.run_flashback("edit", nfc, "-q", "uno", "--new-answer", "ONE")
+        self.assertEqual(rc, 1)
+        self.assertIn("collide", stderr.getvalue())
+
+        # Neither file was touched.
+        self.assertEqual(established.read_text(encoding="utf-8"), "Q: uno\nA: one\n")
+        self.assertEqual(other.read_text(encoding="utf-8"), "Q: tres\nA: three\n")
 
     def test_new_question_differing_only_in_unicode_normalization_form_does_not_warn_of_reset(self):
         # --new-question is normalized (edit_card -> normalize_question) before

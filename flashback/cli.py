@@ -170,9 +170,13 @@ def _find_deck_path(decks_dir: Path, deck_name: str) -> Path:
     own cheerful success message that anything went wrong.
 
     Searches the same `decks_dir.glob("*.md")` sync itself iterates, in the same sorted
-    order, so the file this returns for a (rare, already-warned-about) collision between two
-    physically different files that both normalize to `deck_name` is the same one sync
-    treats as canonical — not some other, arbitrary pick.
+    order. When two or more physically different files collide on `deck_name`, this
+    picks the first one by that same sort order — but callers must check
+    `_check_deck_collision` first and refuse to proceed if it reports one: sync (session
+    155) deliberately stopped treating any one colliding file as "canonical" and now
+    refuses to touch any of them, precisely because there's no way to tell which one is
+    real from inside the tool. Silently picking one here anyway would just move that same
+    guessing back into add/remove/edit.
 
     Falls back to the plain NFC-guessed path when no existing file matches: a deck that
     genuinely doesn't exist yet (or `decks_dir` itself doesn't exist yet). `add` uses that
@@ -183,6 +187,46 @@ def _find_deck_path(decks_dir: Path, deck_name: str) -> Path:
             if _normalize_deck_name(candidate.stem) == deck_name:
                 return candidate
     return decks_dir / f"{deck_name}.md"
+
+
+def _check_deck_collision(decks_dir: Path, deck_name: str) -> Optional[str]:
+    """Return an error message if more than one physically distinct file in `decks_dir`
+    normalizes to `deck_name`, else None.
+
+    `_find_deck_path` above silently returns the first (sorted) match when this happens —
+    fine for locating the *one* real file in the ordinary case, but a real collision (two
+    files that both happen to normalize to the same deck name — see `_find_deck_path`'s own
+    docstring for how this arises, e.g. an NFD-named file surviving a `git clone` from
+    macOS next to an NFC one) means that "first match" is an arbitrary pick, not a correct
+    one. `cmd_sync` already detects this exact situation and refuses to touch either file
+    (session 155) rather than gamble on sort order — but `add`/`remove`/`edit` had no
+    equivalent check, so `_find_deck_path` picked one of the two files anyway: `add` could
+    silently write a new card into a throwaway or unrelated file while the deck's real,
+    already-synced cards (review history included) sat untouched in the other, colliding
+    file; `remove`/`edit` could silently operate on the wrong file's content entirely,
+    reporting "no card with that question found" for a question that's really there, just
+    in the file this picked the other one over — the exact ambiguity `sync` already refuses
+    to guess through, just reached through a different door.
+
+    Checked separately from `_find_deck_path` (rather than folded into it) so every caller
+    can refuse up front, the same way `_invalid_deck_name`'s callers do, instead of acting
+    on a path that might be the wrong one.
+    """
+    if not decks_dir.is_dir():
+        return None
+    matches = [
+        candidate
+        for candidate in sorted(decks_dir.glob("*.md"))
+        if _normalize_deck_name(candidate.stem) == deck_name
+    ]
+    if len(matches) <= 1:
+        return None
+    names = ", ".join(str(f) for f in matches)
+    return (
+        f"{len(matches)} files collide on this same deck name ({names}) — refusing to "
+        "guess which one you mean; rename the files so they're distinct decks (or merge "
+        "them by hand), then sync and try again"
+    )
 
 
 def _atomic_write_text(path: Path, data: str) -> None:
@@ -413,6 +457,10 @@ def cmd_add(args):
         return 1
 
     decks_dir = Path(args.decks_dir)
+    collision_error = _check_deck_collision(decks_dir, args.deck)
+    if collision_error:
+        print(f"error: {collision_error}", file=sys.stderr)
+        return 1
     deck_path = _find_deck_path(decks_dir, args.deck)
     decks_dir.mkdir(parents=True, exist_ok=True)
 
@@ -440,6 +488,10 @@ def cmd_remove(args):
         return 1
 
     decks_dir = Path(args.decks_dir)
+    collision_error = _check_deck_collision(decks_dir, args.deck)
+    if collision_error:
+        print(f"error: {collision_error}", file=sys.stderr)
+        return 1
     deck_path = _find_deck_path(decks_dir, args.deck)
     if not deck_path.exists():
         print(f"no such deck: {deck_path}", file=sys.stderr)
@@ -471,6 +523,10 @@ def cmd_edit(args):
         return 1
 
     decks_dir = Path(args.decks_dir)
+    collision_error = _check_deck_collision(decks_dir, args.deck)
+    if collision_error:
+        print(f"error: {collision_error}", file=sys.stderr)
+        return 1
     deck_path = _find_deck_path(decks_dir, args.deck)
     if not deck_path.exists():
         print(f"no such deck: {deck_path}", file=sys.stderr)
