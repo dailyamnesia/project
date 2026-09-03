@@ -204,6 +204,34 @@ def _find_deck_path(decks_dir: Path, deck_name: str) -> Path:
     return decks_dir / f"{deck_name}.md"
 
 
+def _describe_collision_paths(paths) -> str:
+    """Render a list of colliding deck-file paths so the paths are actually
+    distinguishable from each other on screen.
+
+    The whole point of a collision message is "rename the files so they're
+    distinct" — but the files collide *because* they normalize to the same
+    deck name, and the most common real way that happens (see
+    `_find_deck_path`'s docstring) is two different Unicode normalization
+    forms of the same visible text, e.g. "café" as one precomposed codepoint
+    (NFC) versus "e" + a combining acute accent (NFD). Both render on screen
+    as the exact same glyphs — that's the whole reason they're a collision in
+    the first place — so plain `str(path)`-joining here used to print the
+    same-looking path twice, e.g. "…/café.md, …/café.md", with genuinely no
+    way for a person reading it to tell which listed path is which file, let
+    alone act on "rename the files so they're distinct."
+
+    `repr()` doesn't help either: Python only escapes a string's *unprintable*
+    characters, and a combining mark like U+0301 is printable (it just renders
+    combined with the character before it) — so `repr()` of an NFD name still
+    prints as plain "café", identical to the NFC one. `ascii()` forces every
+    non-ASCII character to an escaped `\\xXX`/`\\uXXXX` form regardless of
+    printability, which is exactly the disambiguation needed here: the NFC
+    name becomes "caf\\xe9.md" and the NFD name becomes "cafe\\u0301.md" —
+    visibly different, and precise enough to actually resolve by hand.
+    """
+    return ", ".join(ascii(str(path)) for path in paths)
+
+
 def _check_deck_collision(decks_dir: Path, deck_name: str) -> Optional[str]:
     """Return an error message if more than one physically distinct file in `decks_dir`
     normalizes to `deck_name`, else None.
@@ -236,7 +264,7 @@ def _check_deck_collision(decks_dir: Path, deck_name: str) -> Optional[str]:
     ]
     if len(matches) <= 1:
         return None
-    names = ", ".join(str(f) for f in matches)
+    names = _describe_collision_paths(matches)
     return (
         f"{len(matches)} files collide on this same deck name ({names}) — refusing to "
         "guess which one you mean; rename the files so they're distinct decks (or merge "
@@ -424,7 +452,7 @@ def cmd_sync(args):
                 # a collision exists: the deck's existing database state (if
                 # any) is left exactly as it was, until a person resolves the
                 # collision by renaming one of the files and syncing again.
-                names = ", ".join(str(f) for f in deck_files)
+                names = _describe_collision_paths(deck_files)
                 print(
                     f"skipping {deck_name!r}: {len(deck_files)} files collide on "
                     f"this same deck name ({names}) — not syncing any of them, so "

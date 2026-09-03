@@ -151,6 +151,43 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(established.read_text(encoding="utf-8"), "Q: uno\nA: one\n")
         self.assertEqual(other.read_text(encoding="utf-8"), "Q: tres\nA: three\n")
 
+    def test_collision_error_lets_the_two_colliding_paths_be_told_apart(self):
+        # The message above tells a person to "rename the files so they're
+        # distinct" -- but an NFC-named file and an NFD-named file collide
+        # *because* they render as the exact same glyphs on screen ("café"
+        # either way), so joining plain str(path) for each one (as this
+        # message used to) printed the identical-looking path twice, e.g.
+        # "...café.md, ...café.md", with no way for a person reading it to
+        # tell which listed path is which real file on disk, let alone act
+        # on the instruction to rename one of them.
+        #
+        # repr() doesn't fix this either: Python only escapes a string's
+        # *unprintable* characters, and NFD's combining acute accent
+        # (U+0301) is printable -- it just renders merged with the letter
+        # before it -- so repr() of the NFD name still prints as plain
+        # "café", identical to the NFC one. Only ascii(), which forces every
+        # non-ASCII character to an escaped \xXX/\uXXXX form regardless of
+        # printability, actually makes the two paths look different
+        # ("caf\xe9.md" vs "café.md") -- so that's what the error
+        # message must contain, not the human-visible spelling.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        nfc_path = self.decks_dir / f"{nfc}.md"
+        nfd_path = self.decks_dir / f"{nfd}.md"
+        nfc_path.write_text("Q: uno\nA: one\n", encoding="utf-8")
+        nfd_path.write_text("Q: tres\nA: three\n", encoding="utf-8")
+
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            rc = self.run_flashback("add", nfc, "-q", "cuatro?", "-a", "four")
+        self.assertEqual(rc, 1)
+        message = stderr.getvalue()
+        self.assertIn(ascii(str(nfc_path)), message)
+        self.assertIn(ascii(str(nfd_path)), message)
+
     def test_deck_name_with_leading_or_trailing_whitespace_is_the_same_deck(self):
         # _normalize_deck_name NFC-normalized a deck name but never stripped
         # surrounding whitespace, unlike question/answer text — so a plain
@@ -1262,6 +1299,37 @@ class TestSyncCommand(unittest.TestCase):
         with open_db(self.state_dir / "state.sqlite3") as conn:
             rows2 = due_cards(conn, date.today())
         self.assertEqual(rows2, [])
+
+    def test_collision_message_lets_the_two_colliding_paths_be_told_apart(self):
+        # Same gap as TestAddCommand's equivalent test, just for sync's own
+        # collision message rather than _check_deck_collision's: an
+        # NFC-named file and an NFD-named file collide *because* they render
+        # as the identical glyphs on screen, so this message's plain
+        # str(path)-joining used to print the same-looking "café.md" twice,
+        # with no way to tell from the message alone which listed path is
+        # which physical file -- defeating the message's own "rename the
+        # files so they're distinct" instruction. Only an ascii()-escaped
+        # form of each path (forcing the non-ASCII bytes to \xXX/\uXXXX
+        # regardless of printability) actually differs between the two --
+        # repr() does not, since NFD's combining accent is printable and
+        # renders merged with the preceding letter either way.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        nfc_path = self.decks_dir / f"{nfc}.md"
+        nfd_path = self.decks_dir / f"{nfd}.md"
+        nfc_path.write_text("Q: nfc-only question\nA: nfc answer\n", encoding="utf-8")
+        nfd_path.write_text("Q: nfd-only question\nA: nfd answer\n", encoding="utf-8")
+
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+        message = stderr.getvalue()
+        self.assertIn(ascii(str(nfc_path)), message)
+        self.assertIn(ascii(str(nfd_path)), message)
 
     def test_a_new_colliding_file_does_not_wipe_an_already_established_decks_cards(self):
         # The narrower, more serious sibling gap the fix above closes: the
