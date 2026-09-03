@@ -96,6 +96,18 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     look like they worked (a success message, a file on disk) but the card never
     becomes reachable through the tool again.
 
+    A bare `.` or `..` (no slash at all) is rejected too, but for a different reason
+    and with its own message: `decks_dir / f"{name}.md"` turns either into an
+    ordinary, harmless filename (`..md`/`...md`), not an actual directory reference,
+    so there's no path-escape risk here the way there is for a name containing a real
+    separator. The problem is purely that a deck named exactly "." or ".." would sit
+    in every deck listing (`sync`, `due`, `stats`, `review`) looking like a shell's
+    "current/parent directory", not a deck — confusing on sight, and an easy typo to
+    make unknowingly if a script builds `--deck`/deck-name arguments from a path.
+    Blaming this on "a path separator", as one shared message with the check above
+    used to, is simply false for these two: neither one contains a "/" or "\\" at
+    all, so that explanation doesn't match what the user actually typed.
+
     An empty name has the same "looks like it worked" shape for a different reason:
     it writes to a file literally named `.md`, and `Path(...).stem` — used by `sync`
     to recover the deck name from the file it globbed — doesn't split a leading dot
@@ -121,8 +133,10 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     reorder anything either, so they need their own check, same as
     `_check_card_text` needs one for question/answer text.
     """
-    if "/" in name or "\\" in name or name in (".", ".."):
+    if "/" in name or "\\" in name:
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
+    if name in (".", ".."):
+        return f"invalid deck name: {name!r} (deck names can't be '.' or '..')"
     if not name:
         return "invalid deck name: '' (deck name can't be empty)"
     for ch in name:

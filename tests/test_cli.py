@@ -224,6 +224,23 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_of_dot_or_dotdot_error_does_not_blame_a_path_separator(self):
+        # "." and ".." are rejected by the same `if` as an actual "/" or "\\" in
+        # the name, but neither one *contains* a path separator -- so the shared
+        # error message text ("deck names can't contain a path separator") is
+        # simply false when it fires for one of these two, not just imprecise:
+        # a user hitting this for `flashback add . ...` or `flashback add .. ...`
+        # sees a reason that doesn't match what they actually typed, with no
+        # slash anywhere in sight to explain it.
+        for name in (".", ".."):
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                rc = self.run_flashback("add", name, "-q", "hola?", "-a", "hello")
+            self.assertEqual(rc, 1)
+            self.assertNotIn("/", name)
+            self.assertNotIn("\\", name)
+            self.assertNotIn("path separator", stderr.getvalue())
+
     def test_empty_deck_name_is_rejected_instead_of_becoming_a_hidden_dotfile(self):
         # An empty deck name isn't caught by the slash/./.. checks above, but has
         # the same "looks like it worked, isn't reachable the same way again"
