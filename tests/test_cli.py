@@ -1165,6 +1165,26 @@ class TestSyncCommand(unittest.TestCase):
         # bad-named deck was skipped, not silently loaded.
         self.assertEqual({r["question"] for r in rows}, {"bonjour?"})
 
+    def test_hand_created_deck_file_with_control_character_name_does_not_leak_raw_bytes_in_the_skip_message(self):
+        # The test above proves the bad-named deck's cards never reach the
+        # database. But the *warning that explains why* is printed too --
+        # "skipping {deck_file}: {name_error}" -- and name_error already
+        # reprs the offending name (see _invalid_deck_name), specifically so
+        # the raw control character/bidi-override never reaches the
+        # terminal. deck_file itself is a Path built straight from this same
+        # bad-named file, though, and gets interpolated with plain str(),
+        # not repr() -- printing the identical raw ESC byte this whole check
+        # exists to keep off the screen, right next to the safely-reprd copy
+        # of it, defeating the point of the check for this one message.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        (self.decks_dir / "evil\x1b[31mred.md").write_text("Q: q1\nA: a1\n", encoding="utf-8")
+
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("\x1b", err.getvalue())
+
     def test_directory_matching_deck_glob_is_skipped_not_a_crash(self):
         # decks_dir.glob("*.md") matches directories too, not just files —
         # a directory that happens to end in .md used to crash the whole

@@ -392,7 +392,14 @@ def cmd_sync(args):
             # to the terminal in every command that lists decks afterward.
             name_error = _invalid_deck_name(deck_name)
             if name_error is not None:
-                print(f"skipping {deck_file}: {name_error}", file=sys.stderr)
+                # deck_file!r, not deck_file: name_error already reprs the
+                # offending deck name so a control character/bidi-override
+                # never reaches the terminal raw (see _invalid_deck_name) —
+                # but deck_file is a Path built from that exact same bad
+                # name, and str-interpolating it here would print the
+                # identical raw byte right next to the safely-reprd copy,
+                # undoing the whole point of the check for this one message.
+                print(f"skipping {deck_file!r}: {name_error}", file=sys.stderr)
                 continue
             files_by_deck.setdefault(deck_name, []).append(deck_file)
 
