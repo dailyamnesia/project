@@ -24,6 +24,7 @@ from .parser import (
 )
 from .scheduler import Grade
 from .storage import (
+    DeckDirMismatch,
     deck_stats,
     due_cards,
     ensure_state_dir,
@@ -429,7 +430,27 @@ def cmd_sync(args):
                 # deck that's actually broken.
                 print(f"skipping {deck_file}: {exc}", file=sys.stderr)
                 continue
-            added, removed = sync_deck(conn, deck_name, cards, today, decks_dir_key)
+            try:
+                added, removed = sync_deck(conn, deck_name, cards, today, decks_dir_key)
+            except DeckDirMismatch as exc:
+                # This deck name is already owned by a different, concrete
+                # --decks-dir recorded in this same --state-dir — reconciling
+                # against it here would silently delete or overwrite that
+                # other, unrelated deck's cards (review history included),
+                # even though its own file was never touched. Same "don't
+                # guess, refuse" response as the same-directory physical-file
+                # collision above, just for a collision across directories
+                # instead of within one.
+                print(
+                    f"skipping {deck_name!r}: {exc} — syncing it from here would "
+                    "silently delete or overwrite that other directory's cards for "
+                    "this same deck name, which is almost certainly a different, "
+                    "unrelated deck that just happens to share the name; rename one "
+                    "of the two deck files so they're distinct, or use a separate "
+                    "--state-dir per --decks-dir, then sync again",
+                    file=sys.stderr,
+                )
+                continue
             # Commit each deck immediately rather than relying on open_db's
             # single end-of-session commit: an interruption partway through a
             # multi-deck sync (KeyboardInterrupt, a crash on a later deck)

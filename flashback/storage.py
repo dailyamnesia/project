@@ -101,6 +101,29 @@ def open_db(db_path: Path):
         conn.close()
 
 
+class DeckDirMismatch(Exception):
+    """Raised by sync_deck when `deck` is already recorded under a different,
+    concrete `decks_dir` than the one calling now.
+
+    See sync_deck's own docstring for the failure this exists to prevent:
+    without it, a deck-name collision between two unrelated `--decks-dir`s
+    that happen to share one `--state-dir` isn't just invisible to
+    prune_missing_decks's pruning (which decks_dir already fixed) — it
+    actively corrupts sync_deck's own reconciliation, deleting or
+    overwriting the other directory's cards outright, every time either
+    directory is synced.
+    """
+
+    def __init__(self, deck: str, recorded_decks_dir: str, attempted_decks_dir: str):
+        self.deck = deck
+        self.recorded_decks_dir = recorded_decks_dir
+        self.attempted_decks_dir = attempted_decks_dir
+        super().__init__(
+            f"deck {deck!r} was last synced from {recorded_decks_dir!r}, not "
+            f"{attempted_decks_dir!r}"
+        )
+
+
 def sync_deck(conn, deck: str, cards, today: date, decks_dir: str = None):
     """Insert new cards from a parsed deck, refresh text for existing ones,
     and remove cards no longer present in the deck file.
@@ -125,7 +148,34 @@ def sync_deck(conn, deck: str, cards, today: date, decks_dir: str = None):
     prune_missing_decks for why this matters. It isn't part of a deck's
     identity (that's still just `deck`, matching `card_id`'s own scoping),
     only a record of where this deck was last actually seen.
+
+    Raises DeckDirMismatch, touching nothing, if `deck` already has a
+    *different*, concrete recorded `decks_dir` than the one passed here.
+    `prune_missing_decks` already refuses to prune a deck that belongs to a
+    different `--decks-dir` sharing this `--state-dir` — but that guard only
+    protects a deck whose file goes missing. An ordinary deck-name collision
+    between two unrelated `--decks-dir`s (each with its own, real, unrelated
+    "spanish.md", say) was never given the same protection here: this
+    function reconciles purely by `deck` name, so syncing decks-dir B would
+    silently delete every one of decks-dir A's cards for that name not
+    present in B's file (real review history included) and splice in B's
+    unrelated content instead — even though A's own file on disk was never
+    touched. Only checked when *both* the recorded and the incoming
+    decks_dir are concrete (non-NULL): a NULL recorded value (never synced
+    under code that stamps one, or the caller didn't pass one) is treated
+    the same "unknown, not a proven collision" way prune_missing_decks
+    already treats it, so this can't itself brick an ordinary first real
+    sync after an upgrade.
     """
+    existing_row = conn.execute("SELECT decks_dir FROM decks WHERE name = ?", (deck,)).fetchone()
+    if (
+        existing_row is not None
+        and existing_row["decks_dir"] is not None
+        and decks_dir is not None
+        and existing_row["decks_dir"] != decks_dir
+    ):
+        raise DeckDirMismatch(deck, existing_row["decks_dir"], decks_dir)
+
     conn.execute("INSERT OR IGNORE INTO decks (name, decks_dir) VALUES (?, ?)", (deck, decks_dir))
     conn.execute("UPDATE decks SET decks_dir = ? WHERE name = ?", (decks_dir, deck))
     seen_ids = set()

@@ -953,6 +953,52 @@ class TestSyncCommand(unittest.TestCase):
             rows = due_cards(conn, date.today())
         self.assertEqual({r["deck"] for r in rows}, {"spanish", "french"})
 
+    def test_syncing_a_different_decks_dir_with_a_colliding_deck_name_does_not_corrupt_the_first(self):
+        # The test above shows prune_missing_decks is already scoped
+        # correctly across --decks-dirs sharing one --state-dir. But an
+        # ordinary deck-*name* collision between two unrelated --decks-dirs
+        # (each with its own real "spanish.md", not one missing file) never
+        # got the same protection: sync_deck reconciles purely by deck name,
+        # so syncing decks-dir B used to silently delete decks-dir A's
+        # already-established "spanish" cards -- real review history
+        # included -- and splice in B's unrelated content, even though A's
+        # own file on disk was never touched.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("sync")
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            row = due_cards(conn, date.today())[0]
+            record_review(conn, row, Grade.GOOD, date.today())  # give it real history
+
+        other_decks_dir = Path(self._tmp.name) / "other-decks"
+        other_decks_dir.mkdir()
+        (other_decks_dir / "spanish.md").write_text(
+            "Q: unrelated question\nA: unrelated answer\n", encoding="utf-8"
+        )
+
+        out = io.StringIO()
+        err = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback(
+                "--decks-dir", str(other_decks_dir), "--state-dir", str(self.state_dir), "sync"
+            )
+        self.assertEqual(rc, 0)
+        # The collision is reported, not silently absorbed -- and the losing
+        # deck's summary line (which would only ever print on an actual
+        # sync) must not appear, since nothing was actually synced for it.
+        self.assertIn("spanish", err.getvalue())
+        self.assertNotIn("spanish: 1 card", out.getvalue())
+
+        # decks-dir A's file was never touched...
+        self.assertIn("hello?", (self.decks_dir / "spanish.md").read_text(encoding="utf-8"))
+        # ...and its database state -- including the review history just
+        # recorded -- must survive completely intact, not be replaced by
+        # decks-dir B's unrelated card.
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = {r["question"]: r for r in due_cards(conn, date.today() + timedelta(days=1))}
+        self.assertIn("hello?", rows)
+        self.assertEqual(rows["hello?"]["repetitions"], 1)
+        self.assertNotIn("unrelated question", rows)
+
     def test_deleted_deck_cards_are_gone_from_due_after_sync(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
         self.run_flashback("add", "french", "-q", "bonjour?", "-a", "hello")

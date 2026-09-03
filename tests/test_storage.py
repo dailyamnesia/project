@@ -9,6 +9,7 @@ from flashback.parser import parse_deck
 from flashback.scheduler import DEFAULT_EASINESS, Grade
 from flashback.storage import (
     SCHEMA,
+    DeckDirMismatch,
     deck_stats,
     due_cards,
     ensure_state_dir,
@@ -370,6 +371,81 @@ class TestStorage(unittest.TestCase):
             pruned = prune_missing_decks(conn, {"spanish"}, "/decks/A")
             self.assertEqual(pruned, [])
             self.assertEqual({r["deck"] for r in due_cards(conn, today)}, {"spanish", "french"})
+
+    def test_sync_deck_refuses_a_deck_name_already_owned_by_a_different_decks_dir(self):
+        # prune_missing_decks (tests above) already refuses to prune a deck
+        # that belongs to a different --decks-dir sharing this --state-dir —
+        # but sync_deck's own reconciliation, which runs on every ordinary
+        # sync (not just when a file goes missing), had no equivalent guard.
+        # Two entirely unrelated --decks-dir's, each with a real, unrelated
+        # "spanish" deck, sharing one --state-dir: syncing decks-dir B must
+        # not silently delete decks-dir A's already-established "spanish"
+        # cards (real review history included) and splice in B's unrelated
+        # content in their place, even though A's own file was never synced
+        # again and sits untouched on disk.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(
+                conn, "spanish", parse_deck("Q: hello\nA: hola\n"), today, "/decks/A"
+            )
+            row = due_cards(conn, today)[0]
+            record_review(conn, row, Grade.GOOD, today)  # give it real history
+
+            with self.assertRaises(DeckDirMismatch):
+                sync_deck(
+                    conn,
+                    "spanish",
+                    parse_deck("Q: unrelated question\nA: unrelated answer\n"),
+                    today,
+                    "/decks/B",
+                )
+
+            # Nothing was touched: A's card, and its review history, survive
+            # completely intact.
+            rows = conn.execute("SELECT * FROM cards WHERE deck = 'spanish'").fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["question"], "hello")
+            self.assertEqual(rows[0]["repetitions"], 1)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT decks_dir FROM decks WHERE name = 'spanish'"
+                ).fetchone()[0],
+                "/decks/A",
+            )
+
+    def test_sync_deck_allows_a_second_sync_from_the_same_decks_dir(self):
+        # The mismatch guard must not fire on the ordinary, expected case: the
+        # ordinary "re-sync the same deck from the same directory" path this
+        # whole function exists for.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "spanish", parse_deck("Q: hello\nA: hola\n"), today, "/decks/A")
+            added, removed = sync_deck(
+                conn, "spanish", parse_deck("Q: hello\nA: hola\n---\nQ: bye\nA: adios\n"), today, "/decks/A"
+            )
+            self.assertEqual((added, removed), (1, 0))
+
+    def test_sync_deck_allows_first_real_sync_of_a_null_decks_dir_deck(self):
+        # A deck synced before the decks_dir column existed (or by a caller
+        # that didn't pass one) is recorded with decks_dir=NULL — "unknown",
+        # not "belongs to no directory". The first sync that actually passes
+        # a concrete decks_dir must be allowed to claim it, exactly like
+        # prune_missing_decks already allows pruning to resume once that
+        # happens (see the NULL-decks_dir tests above) — otherwise every
+        # pre-existing deck would be permanently unsyncable after upgrading.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "spanish", parse_deck("Q: hello\nA: hola\n"), today)  # decks_dir=None
+            added, removed = sync_deck(
+                conn, "spanish", parse_deck("Q: hello\nA: hola\n"), today, "/decks/A"
+            )
+            self.assertEqual((added, removed), (0, 0))
+            self.assertEqual(
+                conn.execute(
+                    "SELECT decks_dir FROM decks WHERE name = 'spanish'"
+                ).fetchone()[0],
+                "/decks/A",
+            )
 
     def test_known_decks_includes_a_deck_synced_with_zero_cards(self):
         # Regression test: a deck file that parses fine but has no cards in it
