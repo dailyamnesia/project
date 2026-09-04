@@ -43,13 +43,18 @@ repo.)
 
 ```bash
 mkdir decks
-cp examples/spanish-basics.md decks/
+flashback add spanish-basics -q "How do you say hello in Spanish?" -a Hola
+flashback add spanish-basics -q "How do you say thank you in Spanish?" -a Gracias
 
 flashback sync       # load deck files into the review database
 flashback review     # review whatever's due
 flashback stats      # see totals per deck
 flashback hard       # see which cards you're actually struggling with
 ```
+
+(If you cloned the repo instead of just `pip install`-ing it, `examples/
+spanish-basics.md` has a larger starter deck you can `cp` into `decks/`
+instead of typing the two `add` commands above.)
 
 `flashback sync` re-reads your deck files, so edit them freely — fix a
 typo, add a card, delete one — and re-run `sync` to pick up the changes.
