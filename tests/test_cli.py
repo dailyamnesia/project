@@ -1053,6 +1053,52 @@ class TestSyncCommand(unittest.TestCase):
         self.assertEqual(rows["hello?"]["repetitions"], 1)
         self.assertNotIn("unrelated question", rows)
 
+    def test_decks_dir_mismatch_message_lets_the_two_colliding_directories_be_told_apart(self):
+        # Same shape as test_collision_error_lets_the_two_colliding_paths_be_told_apart
+        # above, but for DeckDirMismatch's own message (storage.py) instead of
+        # _check_deck_collision's -- the two are separate call sites that both
+        # print a pair of paths a person needs to tell apart, and the ascii()
+        # fix for the NFC/NFD-collision case (a recently-fixed bug) only
+        # touched the collision-within-one-directory message, not this one.
+        #
+        # Here the *directories themselves* (not the deck file names) are two
+        # different Unicode normalization forms of the same visible text, so
+        # decks_dir_key -- str(Path(...).resolve()) -- differs only in
+        # normalization between the two runs. DeckDirMismatch's message used
+        # plain !r (repr()) for both paths, which -- like the collision bug --
+        # doesn't escape a printable combining mark, so both paths render as
+        # the identical "café" text even though they're genuinely different
+        # directories on disk.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        base = Path(self._tmp.name)
+        decks_dir_a = base / nfc / "decks"
+        decks_dir_b = base / nfd / "decks"
+        decks_dir_a.mkdir(parents=True)
+        decks_dir_b.mkdir(parents=True)
+        (decks_dir_a / "spanish.md").write_text("Q: hello?\nA: hola\n", encoding="utf-8")
+        (decks_dir_b / "spanish.md").write_text(
+            "Q: unrelated question\nA: unrelated answer\n", encoding="utf-8"
+        )
+
+        rc = self.capture(
+            "--decks-dir", str(decks_dir_a), "--state-dir", str(self.state_dir), "sync"
+        )[0]
+        self.assertEqual(rc, 0)
+
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            rc = self.run_flashback(
+                "--decks-dir", str(decks_dir_b), "--state-dir", str(self.state_dir), "sync"
+            )
+        self.assertEqual(rc, 0)
+        message = err.getvalue()
+        self.assertIn("was last synced from", message)
+        self.assertIn(ascii(str(decks_dir_a.resolve())), message)
+        self.assertIn(ascii(str(decks_dir_b.resolve())), message)
+
     def test_deleted_deck_cards_are_gone_from_due_after_sync(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
         self.run_flashback("add", "french", "-q", "bonjour?", "-a", "hello")

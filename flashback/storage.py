@@ -112,6 +112,21 @@ class DeckDirMismatch(Exception):
     actively corrupts sync_deck's own reconciliation, deleting or
     overwriting the other directory's cards outright, every time either
     directory is synced.
+
+    The two directory paths in this exception's own message are rendered with
+    `ascii()`, not plain `!r` (repr()): the most common real way two
+    genuinely different `--decks-dir`s end up sharing a deck name is a
+    directory-name component spelled in two different Unicode normalization
+    forms of the same visible text (e.g. "café" as one precomposed codepoint
+    vs. "e" + a combining acute accent) — both render as identical glyphs on
+    screen. `repr()` only escapes a string's *unprintable* characters, and a
+    combining mark is printable (it just renders merged with the letter
+    before it), so `repr()` of the two paths still prints the same-looking
+    text twice, e.g. "...café/decks, ...café/decks", with no way to tell
+    which listed path is which real directory — the same "looks the same but
+    silently isn't" gap `_describe_collision_paths` in `cli.py` exists to
+    close for a same-directory deck-file collision, just reached through a
+    different door (two directories, not two files in one directory).
     """
 
     def __init__(self, deck: str, recorded_decks_dir: str, attempted_decks_dir: str):
@@ -119,8 +134,8 @@ class DeckDirMismatch(Exception):
         self.recorded_decks_dir = recorded_decks_dir
         self.attempted_decks_dir = attempted_decks_dir
         super().__init__(
-            f"deck {deck!r} was last synced from {recorded_decks_dir!r}, not "
-            f"{attempted_decks_dir!r}"
+            f"deck {deck!r} was last synced from {ascii(recorded_decks_dir)}, not "
+            f"{ascii(attempted_decks_dir)}"
         )
 
 
