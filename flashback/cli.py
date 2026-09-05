@@ -708,9 +708,31 @@ def _check_deck_filter(conn, deck):
     such deck." Otherwise a mistyped `--deck` has always silently matched
     zero rows and printed exactly what a caught-up deck prints, with no way
     to tell the two apart.
+
+    Runs `_invalid_deck_name` first, before even checking the database: a
+    `--deck` value with an unpaired Unicode surrogate isn't just "not a deck
+    that exists" the way a plain typo is -- `known_decks()` and the
+    `due_cards`/`deck_stats`/`hard_cards` queries these callers run next all
+    bind `deck` as a raw SQL parameter, and sqlite3 has to encode it to UTF-8
+    to do that, which raises `UnicodeEncodeError` unconditionally for one.
+    On an empty database (no decks synced yet), the check below used to
+    return None unconditionally -- there being no "known decks" to compare
+    against -- so a surrogate-laden `--deck` sailed straight through to that
+    crash. `main()`'s `UnicodeEncodeError` handler then caught it and blamed
+    "the current terminal or output," suggesting a UTF-8 locale, which is
+    simply wrong here: nothing was ever printed, the failure was in binding
+    a SQL parameter, and no locale setting makes an unpaired surrogate
+    valid. `add`/`remove`/`edit` already reject this (and control
+    characters, bidi overrides, path separators, etc.) in their own `deck`
+    argument via `_invalid_deck_name` -- no real deck could ever be named
+    this, so rejecting it here up front, before any query runs, is both
+    accurate and consistent with the rest of the CLI.
     """
     if deck is None:
         return None
+    name_error = _invalid_deck_name(deck)
+    if name_error is not None:
+        return name_error
     known = known_decks(conn)
     if not known or deck in known:
         return None

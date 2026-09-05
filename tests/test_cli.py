@@ -2172,6 +2172,32 @@ class TestDeckFilterValidation(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertIn("nothing due", out)
 
+    def test_deck_filter_with_unpaired_surrogate_is_rejected_cleanly(self):
+        # A lone surrogate (U+D800-U+DFFF) reaches `--deck` the same way it
+        # reaches add/remove/edit's own deck-name argument: sys.argv decodes
+        # non-UTF-8 command-line bytes with the 'surrogateescape' handler
+        # (PEP 383), so a stray byte from a mismatched locale or copy-pasted
+        # mojibake lands here as an ordinary Python str with no error yet.
+        # _invalid_deck_name already rejects this for add/remove/edit's own
+        # deck argument, but due/review/stats/hard's `--deck` *filter* never
+        # ran it -- and unlike a merely-nonexistent name (caught safely by
+        # _check_deck_filter's `!r`-escaped "no such deck" message), a
+        # surrogate can't even be encoded to UTF-8 at all. On a database with
+        # no decks yet, `_check_deck_filter` used to return None
+        # unconditionally (matching the "empty database" case tested above),
+        # so this sailed straight through to due_cards/deck_stats/hard_cards'
+        # raw SQL, whose parameter binding crashed with UnicodeEncodeError.
+        # That crash was then caught by main()'s UnicodeEncodeError handler,
+        # which blames "the current terminal or output" and suggests a UTF-8
+        # locale -- completely wrong advice, since nothing was ever printed;
+        # the failure was in binding a SQL parameter, and no locale setting
+        # makes an unpaired surrogate valid.
+        for command in ("due", "review", "stats", "hard"):
+            rc, out, err = self.capture(command, "--deck", "\udc80")
+            self.assertEqual(rc, 1, f"{command} --deck <surrogate>: rc={rc} out={out!r} err={err!r}")
+            self.assertIn("invalid deck name", err)
+            self.assertNotIn("terminal", err)
+
     def test_a_deck_synced_with_zero_cards_is_not_treated_as_nonexistent(self):
         # Regression test: a deck file that parses fine but currently has no
         # cards in it (e.g. every card was hand-removed, or it's a fresh file
