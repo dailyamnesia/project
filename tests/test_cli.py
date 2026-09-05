@@ -1,3 +1,4 @@
+import ast
 import io
 import os
 import sqlite3
@@ -1667,6 +1668,109 @@ class TestOutputEncodingErrors(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("couldn't print", stderr)
         self.assertNotIn("Traceback", stderr)
+
+    def test_removing_a_purely_ascii_card_succeeds_under_ascii_stdout(self):
+        """Every test above deliberately puts non-ASCII text *in the card/deck
+        content* and confirms that fails cleanly rather than crashing raw. But
+        flashback's own hardcoded success message for `remove` — "removed from
+        ... (run `flashback sync` to pick it up -- this card's review history
+        will be deleted on next sync)" — used to contain a literal Unicode em
+        dash of its own, entirely independent of anything the user typed. That
+        means removing a card with a completely ordinary, all-ASCII question
+        and deck name still crashed under a restrictive/ASCII stdout, which
+        contradicts the exact guarantee this whole test class exists to check
+        (and contradicts the "not a problem with the content itself" wording
+        of the UnicodeEncodeError handler's own message, printed when this
+        fails)."""
+        self.run_flashback("add", "plain-deck", "-q", "plain question?", "-a", "plain answer")
+
+        rc, stderr = self._run_with_ascii_stdout("remove", "plain-deck", "-q", "plain question?")
+
+        self.assertEqual(rc, 0, f"remove of purely-ASCII content should succeed under ASCII stdout; stderr={stderr!r}")
+
+    def test_hard_with_no_hard_cards_succeeds_under_ascii_stdout(self):
+        """Same shape of bug as the `remove` case above, for `hard`'s "nothing
+        looks hard yet" message, which also used to contain a literal em dash
+        with no card content involved at all."""
+        self.run_flashback("add", "plain-deck", "-q", "plain question?", "-a", "plain answer")
+        self.run_flashback("sync")
+
+        rc, stderr = self._run_with_ascii_stdout("hard")
+
+        self.assertEqual(rc, 0, f"'hard' with only ASCII content should succeed under ASCII stdout; stderr={stderr!r}")
+
+
+class TestUserFacingMessagesAreAscii(unittest.TestCase):
+    """Every command in this file has been carefully taught to fail cleanly
+    (a one-line "error: ..." message, never a raw traceback) when a
+    restrictive stdout encoding (a minimal container, a plain "C"/"POSIX"
+    locale) can't print some non-ASCII card or deck content -- see
+    TestOutputEncodingErrors above, and the UnicodeEncodeError handler in
+    cli.main, whose own comment says "this message must itself be pure
+    ASCII" for exactly this reason.
+
+    But several of flashback's own hardcoded, always-printed messages (not
+    user content) were written with a literal Unicode em dash instead of an
+    ASCII hyphen -- e.g. remove's success line and hard's "nothing looks
+    hard yet" message (see TestOutputEncodingErrors' new ascii-stdout
+    regression tests just above). Under the exact same restrictive stdout
+    this codebase otherwise defends against, those messages crash on their
+    own, with entirely ASCII card/deck content in play -- contradicting both
+    the point of this whole defense and the crash message's own claim that
+    it's "not a problem with the content itself".
+
+    Modeled on tests/test_python_compat.py's existing ast-based source scan
+    (same project, same technique, different property): walks every string
+    literal in cli.py/parser.py that isn't a docstring (comments and
+    docstrings are never printed, so non-ASCII prose there is harmless) and
+    fails if any contains a character outside ASCII. parser.LINE_SEPARATOR_CHARS
+    is the one deliberate exception: its two characters (U+2028/U+2029) are
+    data being matched against, not text ever printed to a terminal.
+    """
+
+    FLASHBACK_DIR = Path(__file__).resolve().parent.parent / "flashback"
+
+    def _docstring_ids(self, tree):
+        ids = set()
+        candidates = [tree] + [
+            n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        ]
+        for node in candidates:
+            body = getattr(node, "body", None)
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                ids.add(id(body[0].value))
+        return ids
+
+    def test_no_non_ascii_characters_in_printed_message_literals(self):
+        line_separator_chars = {"\u2028", "\u2029"}
+        offenders = []
+        for filename in ("cli.py", "parser.py"):
+            path = self.FLASHBACK_DIR / filename
+            src = path.read_text(encoding="utf-8")
+            tree = ast.parse(src, filename=str(path))
+            doc_ids = self._docstring_ids(tree)
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                    continue
+                if id(node) in doc_ids:
+                    continue
+                if node.value in line_separator_chars:
+                    # parser.LINE_SEPARATOR_CHARS: data compared against
+                    # deck/card text, never printed on its own.
+                    continue
+                if any(ord(c) > 127 for c in node.value):
+                    offenders.append((filename, node.lineno, node.value))
+        self.assertEqual(
+            offenders,
+            [],
+            f"non-ASCII character(s) found in a user-facing message literal: {offenders}",
+        )
 
 
 class TestNextDueReporting(unittest.TestCase):

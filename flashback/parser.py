@@ -101,7 +101,7 @@ def parse_deck(text: str, *, validate: bool = True) -> list[Card]:
         card = _parse_card(block)
         if card.question in seen_questions:
             raise ParseError(
-                f"duplicate question in this deck: {card.question!r} — "
+                f"duplicate question in this deck: {card.question!r} -- "
                 "each card's question must be unique within a deck file, since "
                 "review history is keyed on deck + question"
             )
@@ -150,7 +150,7 @@ def _parse_card(block: str) -> Card:
                 # caught here, while the prefixes are still visible.
                 raise ParseError(
                     "card has a second 'Q:' line after its answer already started "
-                    f"({line!r}) — this looks like two cards run together because a "
+                    f"({line!r}) -- this looks like two cards run together because a "
                     f"'---' separator is missing between them:\n{block}"
                 )
             if section == "q":
@@ -178,7 +178,7 @@ def _parse_card(block: str) -> Card:
                 # protection.
                 raise ParseError(
                     "card has a second 'Q:' line while its question is still being "
-                    f"read ({line!r}) — if this is meant to be part of the question "
+                    f"read ({line!r}) -- if this is meant to be part of the question "
                     "text rather than a new question, break up the line (e.g. a "
                     f"leading space) so it doesn't start with 'Q:':\n{block}"
                 )
@@ -193,7 +193,7 @@ def _parse_card(block: str) -> Card:
                 # reading "A: ..." (documenting the format itself, say).
                 raise ParseError(
                     "card has a second 'A:' line while its answer is still being "
-                    f"read ({line!r}) — if this is meant to be part of the answer "
+                    f"read ({line!r}) -- if this is meant to be part of the answer "
                     "text rather than a new answer, break up the line (e.g. a "
                     f"leading space) so it doesn't start with 'A:':\n{block}"
                 )
@@ -281,13 +281,13 @@ def _check_card_text(question: str, answer: str) -> None:
             if CARD_SEPARATOR.fullmatch(line):
                 raise ParseError(
                     f"{field_name} contains a line of three or more dashes ({line!r}), which "
-                    "flashback reads as a card separator — this would silently split the card "
+                    "flashback reads as a card separator -- this would silently split the card "
                     "in two on the next sync"
                 )
             if Q_PREFIX.match(line) or A_PREFIX.match(line):
                 raise ParseError(
                     f"{field_name} contains a line starting with 'Q:' or 'A:' ({line!r}), which "
-                    "flashback reads as the start of a new question/answer — this would "
+                    "flashback reads as the start of a new question/answer -- this would "
                     "silently corrupt the card's content on the next sync"
                 )
         for ch in text:
@@ -296,20 +296,20 @@ def _check_card_text(question: str, answer: str) -> None:
             if unicodedata.category(ch) == "Cc":
                 raise ParseError(
                     f"{field_name} contains a control character ({ch!r}), which can hide or "
-                    "overwrite what's shown on screen when the card is displayed — not allowed "
+                    "overwrite what's shown on screen when the card is displayed -- not allowed "
                     "in card text"
                 )
             if unicodedata.bidirectional(ch) in BIDI_FORMATTING_CLASSES:
                 raise ParseError(
                     f"{field_name} contains a bidirectional-formatting character (U+"
                     f"{ord(ch):04X}), which can reorder how surrounding text is displayed on "
-                    "screen — not allowed in card text"
+                    "screen -- not allowed in card text"
                 )
             if ch in LINE_SEPARATOR_CHARS:
                 raise ParseError(
                     f"{field_name} contains a Unicode line/paragraph separator (U+"
                     f"{ord(ch):04X}), which flashback's parser treats as a line break just "
-                    "like a real newline — this would silently change the card's stored text "
+                    "like a real newline -- this would silently change the card's stored text "
                     "on the next sync"
                 )
 
@@ -441,7 +441,7 @@ def edit_card(
     for card in updated:
         if card.question in seen:
             raise ParseError(
-                f"duplicate question in this deck: {card.question!r} — "
+                f"duplicate question in this deck: {card.question!r} -- "
                 "each card's question must be unique within a deck file"
             )
         seen.add(card.question)

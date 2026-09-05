@@ -266,7 +266,7 @@ def _check_deck_collision(decks_dir: Path, deck_name: str) -> Optional[str]:
         return None
     names = _describe_collision_paths(matches)
     return (
-        f"{len(matches)} files collide on this same deck name ({names}) — refusing to "
+        f"{len(matches)} files collide on this same deck name ({names}) -- refusing to "
         "guess which one you mean; rename the files so they're distinct decks (or merge "
         "them by hand), then sync and try again"
     )
@@ -455,7 +455,7 @@ def cmd_sync(args):
                 names = _describe_collision_paths(deck_files)
                 print(
                     f"skipping {deck_name!r}: {len(deck_files)} files collide on "
-                    f"this same deck name ({names}) — not syncing any of them, so "
+                    f"this same deck name ({names}) -- not syncing any of them, so "
                     "this deck's existing review history (if any) is left "
                     "untouched; rename the files so they're distinct decks (or "
                     "merge them by hand) and sync again",
@@ -491,7 +491,7 @@ def cmd_sync(args):
                 # collision above, just for a collision across directories
                 # instead of within one.
                 print(
-                    f"skipping {deck_name!r}: {exc} — syncing it from here would "
+                    f"skipping {deck_name!r}: {exc} -- syncing it from here would "
                     "silently delete or overwrite that other directory's cards for "
                     "this same deck name, which is almost certainly a different, "
                     "unrelated deck that just happens to share the name; rename one "
@@ -579,7 +579,7 @@ def cmd_remove(args):
 
         _atomic_write_text(deck_path, new_text)
     print(
-        f"removed from {deck_path} (run `flashback sync` to pick it up — "
+        f"removed from {deck_path} (run `flashback sync` to pick it up -- "
         "this card's review history will be deleted on next sync)"
     )
     return 0
@@ -672,7 +672,7 @@ def cmd_edit(args):
     # review history.
     if new_question is not None and normalize_question(new_question.strip()) != question:
         note = (
-            " (question changed — this card's review history will reset on the next"
+            " (question changed -- this card's review history will reset on the next"
             " sync, since it's keyed on question text)"
         )
     print(f"edited in {deck_path} (run `flashback sync` to pick it up){note}")
@@ -798,7 +798,7 @@ def cmd_hard(args):
         print("no decks yet. run `flashback sync` first.")
         return 0
     if not rows:
-        print("nothing looks hard yet — no card's easiness has dropped below where")
+        print("nothing looks hard yet -- no card's easiness has dropped below where")
         print("it started (`again`/`hard` move it down far more than `easy` moves")
         print("it back up, so it's not a simple tally of grades either way).")
         return 0
