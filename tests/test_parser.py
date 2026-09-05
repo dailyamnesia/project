@@ -124,6 +124,27 @@ class TestParser(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_deck("Q: question\nA: evil‮txt.exe\n")
 
+    def test_unpaired_surrogate_in_answer_raises(self):
+        # A lone surrogate (U+D800-U+DFFF) can't occur in a real UTF-8 deck
+        # file (surrogates have no valid UTF-8 encoding, so a file containing
+        # one would fail to decode before ever reaching parse_deck) -- but it
+        # can reach append_card/edit_card directly as a Python str, since
+        # sys.argv decodes non-UTF-8 command-line bytes with the
+        # 'surrogateescape' handler instead of raising. Without this check,
+        # such a question/answer would sail through validation here and only
+        # blow up later with UnicodeEncodeError when _atomic_write_text tries
+        # to actually write it -- a crash that main()'s UnicodeEncodeError
+        # handler misdiagnoses as a terminal-output-encoding problem, even
+        # though no locale setting can make an unpaired surrogate valid.
+        with self.assertRaises(ParseError):
+            parse_deck("Q: question\nA: answer with \udcff in it\n")
+        with self.assertRaises(ParseError):
+            append_card("", "question", "answer with \udcff in it")
+
+    def test_unpaired_surrogate_in_question_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "question with \udcff in it", "answer")
+
     def test_duplicate_question_differing_only_in_unicode_normalization_form_raises(self):
         # "é" has two equally valid Unicode encodings: one precomposed
         # codepoint (NFC, U+00E9) or "e" followed by a combining acute accent

@@ -132,6 +132,20 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     the control-character check above catches (they're Zl/Zp) and don't
     reorder anything either, so they need their own check, same as
     `_check_card_text` needs one for question/answer text.
+
+    An unpaired Unicode surrogate (U+D800-U+DFFF, category "Cs") gets the
+    same rejection as it does in `_check_card_text`, and for the identical
+    reason: it isn't a real character, it can never be encoded to UTF-8, so
+    `decks_dir / f"{name}.md"`'s content would never actually be writable
+    (`_atomic_write_text`'s `encode="utf-8"` raises `UnicodeEncodeError`
+    unconditionally on one). A deck name built from non-UTF-8 bytes reaches
+    here silently, since `sys.argv` decodes anything that isn't valid UTF-8
+    with the `surrogateescape` handler instead of raising -- so without this
+    check, that crash surfaces from deep inside `_atomic_write_text` and gets
+    caught by `main`'s `UnicodeEncodeError` handler, which (wrongly, for this
+    cause) blames the terminal's output encoding and suggests a UTF-8 locale.
+    No locale setting fixes an unpaired surrogate; catching it here instead
+    gives a clean, accurate error at the point the bad name was supplied.
     """
     if "/" in name or "\\" in name:
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
@@ -144,6 +158,11 @@ def _invalid_deck_name(name: str) -> Optional[str]:
             return (
                 f"invalid deck name: {name!r} (contains a control character {ch!r}, "
                 "which can hide or overwrite what's shown on screen)"
+            )
+        if unicodedata.category(ch) == "Cs":
+            return (
+                f"invalid deck name: {name!r} (contains an unpaired Unicode surrogate "
+                f"U+{ord(ch):04X}, which can't be encoded to UTF-8 or written to a file at all)"
             )
         if unicodedata.bidirectional(ch) in BIDI_FORMATTING_CLASSES:
             return (

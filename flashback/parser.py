@@ -275,6 +275,32 @@ def _check_card_text(question: str, answer: str) -> None:
     boundaries instead of accented characters. Copy-pasting text from a word
     processor or PDF (common sources of U+2028 line breaks) is enough to hit
     this without typing anything unusual.
+
+    A fourth case, categorically different from the three above: an unpaired
+    UTF-16 surrogate (U+D800-U+DFFF, Unicode category "Cs") isn't a real
+    character at all -- it's not valid content, so it can't be hidden,
+    reordered, or misread as a structural marker the way the checks above
+    guard against. What it actually does is worse: it can never be encoded to
+    UTF-8 (or any real interchange encoding) at all, `str.encode` raises
+    `UnicodeEncodeError` on one unconditionally. A Python `str` can hold one
+    anyway without complaint, because `sys.argv` (and, on POSIX, `input()`)
+    decode raw bytes with the `surrogateescape` error handler, which maps any
+    byte that isn't valid UTF-8 to exactly this kind of surrogate rather than
+    raising -- so a `-q`/`-a`/deck-name argument built from non-UTF-8 bytes
+    (a stray byte from a mismatched locale, a copy-paste of mojibake, binary
+    data passed by mistake) reaches this function silently, with nothing
+    about the string itself signaling a problem yet. Without this check, that
+    content sails through here and through `append_card`/`edit_card`'s own
+    validation, only to blow up in `_atomic_write_text`'s `encode="utf-8"`
+    write -- an exception that then surfaces through `main`'s
+    `UnicodeEncodeError` handler, which assumes any such crash is a
+    terminal-output-encoding problem and tells the user to try
+    `PYTHONIOENCODING=utf-8` or a UTF-8 locale. That advice cannot help here:
+    the failure is in *writing the deck file*, not printing to a terminal,
+    and no locale or encoding setting makes an unpaired surrogate valid --
+    the underlying byte sequence it came from was never valid Unicode text to
+    begin with. Catching it here instead gives a clean, accurate ParseError
+    at the point the bad content was actually supplied.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -298,6 +324,13 @@ def _check_card_text(question: str, answer: str) -> None:
                     f"{field_name} contains a control character ({ch!r}), which can hide or "
                     "overwrite what's shown on screen when the card is displayed -- not allowed "
                     "in card text"
+                )
+            if unicodedata.category(ch) == "Cs":
+                raise ParseError(
+                    f"{field_name} contains an unpaired Unicode surrogate (U+{ord(ch):04X}), "
+                    "which can't be encoded to UTF-8 or written to a deck file at all -- this "
+                    "usually means invalid (non-UTF-8) byte data reached flashback as text, "
+                    "often via a command-line argument; not allowed in card text"
                 )
             if unicodedata.bidirectional(ch) in BIDI_FORMATTING_CLASSES:
                 raise ParseError(

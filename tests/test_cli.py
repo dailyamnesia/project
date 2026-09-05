@@ -324,6 +324,29 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_unpaired_surrogate_is_rejected(self):
+        # A lone surrogate (U+D800-U+DFFF) reaches here as an ordinary Python
+        # str whenever sys.argv decodes non-UTF-8 command-line bytes with the
+        # 'surrogateescape' handler (PEP 383) -- a stray byte from a
+        # mismatched locale or copy-pasted mojibake, not anything exotic.
+        # Without this check, _invalid_deck_name let it through, and the
+        # actual failure only surfaced later in _atomic_write_text's
+        # encode="utf-8" write, as a raw UnicodeEncodeError that main()'s own
+        # handler then misdiagnosed as a terminal-output-encoding problem
+        # (suggesting a UTF-8 locale, which can't fix an unpaired surrogate).
+        rc = self.run_flashback("add", "evil\udcffdeck", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
+    def test_answer_with_unpaired_surrogate_is_rejected_without_writing_file(self):
+        # Same failure shape as the deck-name case above, just for card text:
+        # caught here as a clean ParseError instead of crashing later in
+        # _atomic_write_text with a UnicodeEncodeError that main() then
+        # misreports as a terminal-encoding problem.
+        rc = self.run_flashback("add", "trivia", "-q", "capital of France?", "-a", "answer with \udcff in it")
+        self.assertEqual(rc, 1)
+        self.assertFalse((self.decks_dir / "trivia.md").exists())
+
     def test_answer_with_embedded_separator_line_is_rejected_without_writing_file(self):
         # Without this check, this would write successfully (a normal "added"
         # message) but corrupt the file: the embedded "---" reads back as a
