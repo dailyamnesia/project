@@ -1050,9 +1050,64 @@ def build_parser():
     return parser
 
 
+def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
+    """Return an error message if `value` (a --decks-dir/--state-dir argument)
+    contains an unpaired Unicode surrogate (U+D800-U+DFFF, category "Cs"), else None.
+
+    `_invalid_deck_name` and `_check_card_text` already reject this same kind of
+    character in deck names and card text, for the same reason spelled out at
+    length in both: `sys.argv` decodes anything that isn't valid UTF-8 with the
+    `surrogateescape` error handler instead of raising, so a `--decks-dir`/
+    `--state-dir` value built from non-UTF-8 bytes (a stray byte from a
+    mismatched locale, mojibake pasted into a script, binary data passed by
+    mistake) reaches this function silently, with nothing about the string
+    itself signaling a problem yet.
+
+    Unlike a deck name or card text, though, `--decks-dir`/`--state-dir` were
+    never covered by either check -- they're ordinary filesystem paths, built
+    with `Path(...)` and never routed through `_invalid_deck_name` or
+    `_check_card_text` at all. Without this check, such a value sails straight
+    through argument parsing and into real filesystem operations (`mkdir`,
+    `glob`, opening the sqlite database, writing a deck file) that can succeed
+    or partially succeed on plenty of filesystems even with a surrogate byte
+    embedded in the path -- only the *next* thing that tries to print that
+    same path (a command's own success message, an error message that echoes
+    the path back) hits `UnicodeEncodeError` on stdout. `main`'s existing
+    `UnicodeEncodeError` handler then blames "the current terminal or output"
+    and suggests a UTF-8 locale or `PYTHONIOENCODING=utf-8` -- advice that
+    cannot help here, since the underlying byte sequence was never valid
+    Unicode text to begin with, and (worse) the command's actual file work may
+    already have completed successfully by the time this misleading, exit-1
+    error prints, leaving no way to tell from the output alone that anything
+    actually worked. Checking here, before `args.func` runs anything at all,
+    gives a clean, accurate error at the point the bad value was supplied,
+    instead of a false "your terminal's encoding is wrong" diagnosis after
+    the fact.
+    """
+    for ch in value:
+        if unicodedata.category(ch) == "Cs":
+            return (
+                f"invalid {flag}: {value!r} (contains an unpaired Unicode surrogate "
+                f"U+{ord(ch):04X}, which can't be encoded to UTF-8 or used as a real "
+                "path at all -- this usually means invalid (non-UTF-8) byte data "
+                "reached flashback as a command-line argument)"
+            )
+    return None
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    for flag, attr in (("--decks-dir", "decks_dir"), ("--state-dir", "state_dir")):
+        # Both always exist on `args` by the time parsing finishes: the
+        # top-level parser gives each a real default ("decks"/".flashback"),
+        # and `_add_shared_dir_args`'s `argparse.SUPPRESS` default on every
+        # subparser means a value set before the subcommand is never
+        # overwritten by typing the subcommand -- see that helper's docstring.
+        error = _invalid_dir_arg(flag, getattr(args, attr))
+        if error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
     try:
         return args.func(args)
     except EOFError:

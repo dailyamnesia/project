@@ -2331,5 +2331,89 @@ class TestGlobalDirOptionsPlacement(unittest.TestCase):
         self.assertIn("--state-dir", buf.getvalue())
 
 
+class TestDirArgSurrogateValidation(unittest.TestCase):
+    """--decks-dir/--state-dir reach flashback as ordinary sys.argv strings,
+    decoded with the same 'surrogateescape' handler (PEP 383) that lets a
+    stray non-UTF-8 command-line byte become an unpaired Unicode surrogate in
+    a Python str -- the same reachable, real-world cause _invalid_deck_name
+    and _check_card_text already guard against for deck names and card text.
+
+    Before this fix, neither --decks-dir nor --state-dir was checked for
+    this at all: the surrogate sailed through argument parsing and into real
+    filesystem work (mkdir, the deck file write `add` performs), only
+    surfacing once some later print() of that same path hit
+    UnicodeEncodeError on stdout -- which main()'s existing handler then
+    misdiagnosed as "the current terminal or output" and suggested a UTF-8
+    locale, advice that cannot fix a surrogate baked into the path itself.
+    Worse, for `add`, that crash happened *after* the card had already been
+    written to disk, so the command exited 1 with a misleading error while
+    having actually succeeded.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        # A lone surrogate, exactly as sys.argv would decode a stray
+        # non-UTF-8 byte via 'surrogateescape'.
+        self.bad_component = b"decks-\xff-bad".decode("utf-8", "surrogateescape")
+
+    def test_decks_dir_with_unpaired_surrogate_is_rejected_before_writing_the_card(self):
+        bad_decks_dir = os.path.join(self._tmp.name, self.bad_component)
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+
+        rc = main(
+            ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+        )
+
+        self.assertEqual(rc, 1)
+        # The whole point: this must fail before any file work happens, not
+        # partway through -- with the card already saved and a misleading
+        # "terminal encoding" message printed on top of that success.
+        self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_state_dir_with_unpaired_surrogate_is_rejected_before_creating_it(self):
+        decks_dir = Path(self._tmp.name) / "decks"
+        decks_dir.mkdir()
+        (decks_dir / "spanish.md").write_text("Q: hola?\nA: hello\n", encoding="utf-8")
+        bad_state_dir = os.path.join(self._tmp.name, self.bad_component)
+
+        rc = main(["--decks-dir", str(decks_dir), "--state-dir", bad_state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_state_dir))
+
+    def test_error_message_does_not_misdiagnose_this_as_a_terminal_encoding_problem(self):
+        # Plain redirect_stderr(io.StringIO()) wouldn't reproduce the actual
+        # pre-fix failure here: StringIO never encodes at all, so printing a
+        # surrogate through it never raises -- which is exactly why this
+        # bug's symptom (a crash from main()'s *own* print of `deck_path`)
+        # only shows up against a real encoding-enforcing text stream, the
+        # same reason TestOutputEncodingErrors above drives its checks
+        # through an ascii-encoded io.TextIOWrapper rather than plain
+        # capture. Reusing that same technique here (with 'utf-8', not
+        # 'ascii') proves the point even more strongly: this crashes even
+        # against a perfectly UTF-8-capable stream, because an unpaired
+        # surrogate can never be encoded to UTF-8 at all, by any stream.
+        bad_decks_dir = os.path.join(self._tmp.name, self.bad_component)
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        stderr = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            rc = main(
+                ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+            )
+            stdout.flush()
+            stderr.flush()
+
+        self.assertEqual(rc, 1)
+        message = stderr.buffer.getvalue().decode("utf-8")
+        self.assertIn("surrogate", message)
+        # The misdiagnosis this replaces: no locale setting fixes a
+        # surrogate that's actually baked into the path itself.
+        self.assertNotIn("locale", message)
+        self.assertNotIn("terminal", message)
+
+
 if __name__ == "__main__":
     unittest.main()
