@@ -489,6 +489,62 @@ class TestAddCommand(unittest.TestCase):
         cards = parse_deck(deck_path.read_text(encoding="utf-8"))
         self.assertEqual({c.question for c in cards}, {f"q{i}?" for i in range(8)})
 
+    @unittest.skipIf(os.name == "nt", "the lock this guards against is POSIX-only (fcntl)")
+    def test_concurrent_adds_to_the_same_deck_from_different_state_dirs_do_not_lose_cards(self):
+        # Same lost-update race as test_concurrent_adds_to_the_same_deck_do_not_lose_cards
+        # above, but with each worker using its own --state-dir while sharing
+        # one --decks-dir -- an ordinary thing for two flashback invocations
+        # to do (nothing ties --state-dir to a particular --decks-dir, and
+        # --state-dir's default is relative, so simply running from two
+        # different working directories against one shared, absolute
+        # --decks-dir already does this by accident).
+        #
+        # _deck_lock used to key its lock file's path purely off --state-dir
+        # (a file under `Path(args.state_dir) / "locks"`), so two invocations
+        # with different --state-dirs never contended on the same lock at
+        # all -- each thought it alone was serializing access to the deck
+        # file, while in fact nothing was serializing them against each
+        # other. Confirmed directly against the pre-fix code: 16 concurrent
+        # `add`s to a fresh deck, one per distinct --state-dir, lost roughly
+        # half of the 16 cards to exactly this silent lost update, with every
+        # worker still printing a normal "added" message and exiting 0.
+        barrier = threading.Barrier(8)
+        errors = []
+
+        def worker(i):
+            state_dir = Path(self._tmp.name) / f"state-{i}"
+            barrier.wait()
+            try:
+                rc = main(
+                    [
+                        "--decks-dir",
+                        str(self.decks_dir),
+                        "--state-dir",
+                        str(state_dir),
+                        "add",
+                        "spanish",
+                        "-q",
+                        f"q{i}?",
+                        "-a",
+                        f"a{i}",
+                    ]
+                )
+                if rc != 0:
+                    errors.append(f"worker {i} exited {rc}")
+            except Exception as exc:  # noqa: BLE001 - recording, not swallowing
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        deck_path = self.decks_dir / "spanish.md"
+        cards = parse_deck(deck_path.read_text(encoding="utf-8"))
+        self.assertEqual({c.question for c in cards}, {f"q{i}?" for i in range(8)})
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):

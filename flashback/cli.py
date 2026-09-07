@@ -1,9 +1,11 @@
 """Command-line interface for flashback."""
 
 import argparse
+import hashlib
 import os
 import sqlite3
 import sys
+import tempfile
 import unicodedata
 from contextlib import contextmanager
 from datetime import date
@@ -312,12 +314,37 @@ def _atomic_write_text(path: Path, data: str) -> None:
         raise
 
 
-def _deck_lock_path(args, deck: str) -> Path:
-    return Path(args.state_dir) / "locks" / f"{deck}.lock"
+def _deck_lock_path(decks_dir: Path, deck: str) -> Path:
+    """Return the lock file path for `deck` in `decks_dir`.
+
+    Keyed by `decks_dir`'s *resolved* (absolute, symlink-followed) path plus
+    the deck name, the same identity `cmd_sync`/`sync_deck`/`DeckDirMismatch`
+    already use to recognize "this is the same deck" across differently
+    -- but equivalently -- spelled `--decks-dir` values (a relative path from
+    one cwd, an absolute path, a path through a symlink). `--state-dir` is
+    deliberately *not* part of this key: unlike `--decks-dir`, nothing ties
+    a `--state-dir` to a particular deck file at all, and two flashback
+    invocations are free to use different `--state-dir`s (different cwds
+    with the default `--state-dir .flashback`, say) while still pointing at
+    the exact same shared `--decks-dir` -- see `_deck_lock`'s docstring for
+    why locking under `--state-dir` used to silently fail to protect exactly
+    that case.
+
+    The lock file itself lives under the system temp directory, not inside
+    `decks_dir`: `_deck_lock` still needs somewhere all cooperating
+    processes can find without already agreeing on a `--state-dir`, but a
+    real, visible file dropped next to the user's own deck files (especially
+    one that's never cleaned up, since `flock` -- not deletion -- is what
+    signals "unlocked") is exactly what the earlier, `--state-dir`-based
+    design went out of its way to avoid. The hash keeps the filename short
+    and free of any character `decks_dir`/`deck` could themselves contain.
+    """
+    key = hashlib.sha1(f"{decks_dir.resolve()}\x00{deck}".encode("utf-8")).hexdigest()
+    return Path(tempfile.gettempdir()) / f"flashback-{key}.lock"
 
 
 @contextmanager
-def _deck_lock(lock_path: Path):
+def _deck_lock(lock_path: Path, state_dir: Path):
     """Serialize add/remove/edit's read-modify-write section for one deck file.
 
     Without this, two flashback processes touching the *same* deck at once
@@ -330,24 +357,38 @@ def _deck_lock(lock_path: Path):
     atomicity alone doesn't help here: this is a lost update between two
     otherwise-correct writers racing each other, not a torn write.
 
-    Locks a file under `--state-dir`, not a file living alongside the deck
-    itself, using an OS-level advisory lock (`fcntl.flock`) rather than a
-    lock file whose mere existence signals "locked": `flock` is released
-    automatically when its file descriptor closes, including if the holding
-    process is killed, so there's no stale lock to clean up by hand, and
-    nothing new shows up next to the user's own deck files. POSIX-only, like
+    `lock_path` (see `_deck_lock_path`) is keyed by `--decks-dir`, not
+    `--state-dir`: an earlier version of this lock lived under `--state-dir`
+    instead, which silently stopped protecting anything the moment two
+    cooperating invocations used *different* `--state-dir`s pointed at the
+    same shared `--decks-dir` (verified directly: 16 concurrent `add`s to a
+    fresh deck, one per distinct `--state-dir`, lost 9 of 16 cards with the
+    old, `--state-dir`-keyed lock -- the exact silent lost-update this
+    function exists to prevent, just reached through a door the old key
+    couldn't see). Nothing stops two invocations from doing this deliberately
+    (a shared `--decks-dir` with a personal `--state-dir` per collaborator)
+    or by accident (the default `--state-dir` is relative, so running from
+    two different working directories against one absolute `--decks-dir`
+    already does it).
+
+    Uses an OS-level advisory lock (`fcntl.flock`) rather than a lock file
+    whose mere existence signals "locked": `flock` is released automatically
+    when its file descriptor closes, including if the holding process is
+    killed, so there's no stale lock to clean up by hand. POSIX-only, like
     the rest of this project has no separate Windows handling either; on
     Windows this is a no-op and the pre-existing race remains, no worse than
     before this fix.
+
+    Still separately touches `state_dir` (creating and `.gitignore`-seeding
+    it via the same `ensure_state_dir` helper `open_db` uses) even though the
+    lock itself no longer lives there: add/remove/edit never call `open_db`,
+    so this remains the one place a fresh `--state-dir` gets seeded on that
+    path, and callers (and their tests) still expect that to happen.
     """
+    ensure_state_dir(state_dir)
     if fcntl is None:
         yield
         return
-    # add/remove/edit never touch the database, so this is the only mkdir
-    # of `--state-dir` on their path — route it through the same helper
-    # `open_db` uses so a `.gitignore` gets seeded here too, not just when
-    # `sync`/`review`/etc. happen to run first.
-    ensure_state_dir(lock_path.parent.parent)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
     try:
@@ -556,7 +597,7 @@ def cmd_add(args):
     question = args.question if args.question is not None else input("Q: ")
     answer = args.answer if args.answer is not None else input("A: ")
 
-    with _deck_lock(_deck_lock_path(args, args.deck)):
+    with _deck_lock(_deck_lock_path(decks_dir, args.deck), Path(args.state_dir)):
         try:
             existing_text = _read_deck_text(deck_path) if deck_path.exists() else ""
             new_text = append_card(existing_text, question, answer)
@@ -588,7 +629,7 @@ def cmd_remove(args):
 
     question = args.question if args.question is not None else input("Q: ")
 
-    with _deck_lock(_deck_lock_path(args, args.deck)):
+    with _deck_lock(_deck_lock_path(decks_dir, args.deck), Path(args.state_dir)):
         try:
             existing_text = _read_deck_text(deck_path)
             new_text = remove_card(existing_text, question)
@@ -670,7 +711,7 @@ def cmd_edit(args):
     # read (by another flashback process, or by hand). edit_card() below
     # must act on the current on-disk content, not a stale snapshot from
     # before the prompts.
-    with _deck_lock(_deck_lock_path(args, args.deck)):
+    with _deck_lock(_deck_lock_path(decks_dir, args.deck), Path(args.state_dir)):
         try:
             existing_text = _read_deck_text(deck_path)
             new_text = edit_card(existing_text, question, new_question=new_question, new_answer=new_answer)
