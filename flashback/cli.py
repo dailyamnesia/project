@@ -314,6 +314,17 @@ def _atomic_write_text(path: Path, data: str) -> None:
         raise
 
 
+def _lock_dir() -> Path:
+    """Directory holding deck lock files — a seam the test suite patches.
+
+    Otherwise every add/remove/edit invocation in the test suite drops a
+    real, never-cleaned-up file (see `_deck_lock_path`) into the actual
+    system temp directory; patching this lets tests redirect them into a
+    temp directory that's already torn down at the end of each test.
+    """
+    return Path(tempfile.gettempdir())
+
+
 def _deck_lock_path(decks_dir: Path, deck: str) -> Path:
     """Return the lock file path for `deck` in `decks_dir`.
 
@@ -340,7 +351,7 @@ def _deck_lock_path(decks_dir: Path, deck: str) -> Path:
     and free of any character `decks_dir`/`deck` could themselves contain.
     """
     key = hashlib.sha1(f"{decks_dir.resolve()}\x00{deck}".encode("utf-8")).hexdigest()
-    return Path(tempfile.gettempdir()) / f"flashback-{key}.lock"
+    return _lock_dir() / f"flashback-{key}.lock"
 
 
 @contextmanager

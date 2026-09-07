@@ -22,10 +22,25 @@ from flashback.storage import sync_deck as real_sync_deck
 _RUNNING_AS_ROOT = hasattr(os, "getuid") and os.getuid() == 0
 
 
+def _patch_lock_dir(testcase):
+    """Redirect flashback's deck-lock files into testcase's own temp dir.
+
+    Without this, every add/remove/edit call in the suite drops a real
+    file into the actual system temp directory that nothing ever cleans
+    up (see flashback.cli._deck_lock_path); testcase's own temp dir is
+    already removed by its addCleanup(self._tmp.cleanup), so redirecting
+    lock files there sweeps them away for free instead of leaking.
+    """
+    patcher = patch("flashback.cli._lock_dir", return_value=Path(testcase._tmp.name))
+    testcase.addCleanup(patcher.stop)
+    patcher.start()
+
+
 class TestAddCommand(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -45,6 +60,25 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(len(cards), 1)
         self.assertEqual(cards[0].question, "hello?")
         self.assertEqual(cards[0].answer, "hola")
+
+    def test_deck_lock_file_does_not_leak_into_the_real_system_temp_dir(self):
+        real_tmp_before = set(Path(tempfile.gettempdir()).glob("flashback-*.lock"))
+
+        rc = self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.assertEqual(rc, 0)
+
+        real_tmp_after = set(Path(tempfile.gettempdir()).glob("flashback-*.lock"))
+        self.assertEqual(
+            real_tmp_after,
+            real_tmp_before,
+            "add left a lock file in the real system temp dir instead of "
+            "this test's own (already-cleaned-up) temp dir",
+        )
+        self.assertTrue(
+            list(Path(self._tmp.name).glob("flashback-*.lock")),
+            "expected the lock file to land inside the patched (test-owned) "
+            "temp dir instead",
+        )
 
     def test_appends_to_existing_deck_file(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
@@ -550,6 +584,7 @@ class TestRemoveCommand(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -722,6 +757,7 @@ class TestEditCommand(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -1012,6 +1048,7 @@ class TestSyncCommand(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -1525,6 +1562,7 @@ class TestReviewCommand(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -1634,6 +1672,7 @@ class TestStateDirAccessErrors(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.decks_dir.mkdir()
         (self.decks_dir / "spanish.md").write_text("Q: hola?\nA: hello\n", encoding="utf-8")
@@ -1690,6 +1729,7 @@ class TestOutputEncodingErrors(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -1863,6 +1903,7 @@ class TestNextDueReporting(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -1975,6 +2016,7 @@ class TestHardCommand(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -2152,6 +2194,7 @@ class TestDeckFilterValidation(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -2309,6 +2352,7 @@ class TestGlobalDirOptionsPlacement(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         self.decks_dir = Path(self._tmp.name) / "decks"
         self.state_dir = Path(self._tmp.name) / ".flashback"
 
@@ -2409,6 +2453,7 @@ class TestDirArgSurrogateValidation(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
         # A lone surrogate, exactly as sys.argv would decode a stray
         # non-UTF-8 byte via 'surrogateescape'.
         self.bad_component = b"decks-\xff-bad".decode("utf-8", "surrogateescape")

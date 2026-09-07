@@ -94,9 +94,13 @@ class TestQuickStartIsSelfContained(unittest.TestCase):
                 # Feed "reveal" then "good" for however many cards `review`
                 # finds due — the Quick Start doesn't script specific
                 # grades, it's just demonstrating that the command works.
+                # Also redirect flashback's deck-lock file into `tmp` (torn
+                # down when this `with` exits) instead of leaking a real
+                # file into the system temp directory — see
+                # flashback.cli._lock_dir.
                 with patch("builtins.input", side_effect=itertools.cycle(["", "3"])), redirect_stdout(
                     io.StringIO()
-                ):
+                ), patch("flashback.cli._lock_dir", return_value=Path(tmp)):
                     for line in commands:
                         self._run_line(line, tmp)
             finally:
