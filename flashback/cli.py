@@ -1118,37 +1118,50 @@ def build_parser():
 
 def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
     """Return an error message if `value` (a --decks-dir/--state-dir argument)
-    contains an unpaired Unicode surrogate (U+D800-U+DFFF, category "Cs"), else None.
+    contains an unpaired Unicode surrogate, control character, bidirectional-
+    formatting character, or Unicode line/paragraph separator, else None.
 
-    `_invalid_deck_name` and `_check_card_text` already reject this same kind of
-    character in deck names and card text, for the same reason spelled out at
+    `_invalid_deck_name` and `_check_card_text` already reject these same kinds
+    of characters in deck names and card text, for the reasons spelled out at
     length in both: `sys.argv` decodes anything that isn't valid UTF-8 with the
     `surrogateescape` error handler instead of raising, so a `--decks-dir`/
     `--state-dir` value built from non-UTF-8 bytes (a stray byte from a
     mismatched locale, mojibake pasted into a script, binary data passed by
     mistake) reaches this function silently, with nothing about the string
-    itself signaling a problem yet.
+    itself signaling a problem yet -- and a control character or bidi override
+    reaches it just as silently from a copy-pasted or scripted value.
 
     Unlike a deck name or card text, though, `--decks-dir`/`--state-dir` were
     never covered by either check -- they're ordinary filesystem paths, built
     with `Path(...)` and never routed through `_invalid_deck_name` or
-    `_check_card_text` at all. Without this check, such a value sails straight
-    through argument parsing and into real filesystem operations (`mkdir`,
-    `glob`, opening the sqlite database, writing a deck file) that can succeed
-    or partially succeed on plenty of filesystems even with a surrogate byte
-    embedded in the path -- only the *next* thing that tries to print that
-    same path (a command's own success message, an error message that echoes
-    the path back) hits `UnicodeEncodeError` on stdout. `main`'s existing
-    `UnicodeEncodeError` handler then blames "the current terminal or output"
-    and suggests a UTF-8 locale or `PYTHONIOENCODING=utf-8` -- advice that
-    cannot help here, since the underlying byte sequence was never valid
+    `_check_card_text` at all. Without the surrogate check, such a value sails
+    straight through argument parsing and into real filesystem operations
+    (`mkdir`, `glob`, opening the sqlite database, writing a deck file) that
+    can succeed or partially succeed on plenty of filesystems even with a
+    surrogate byte embedded in the path -- only the *next* thing that tries to
+    print that same path (a command's own success message, an error message
+    that echoes the path back) hits `UnicodeEncodeError` on stdout. `main`'s
+    existing `UnicodeEncodeError` handler then blames "the current terminal or
+    output" and suggests a UTF-8 locale or `PYTHONIOENCODING=utf-8` -- advice
+    that cannot help here, since the underlying byte sequence was never valid
     Unicode text to begin with, and (worse) the command's actual file work may
     already have completed successfully by the time this misleading, exit-1
     error prints, leaving no way to tell from the output alone that anything
-    actually worked. Checking here, before `args.func` runs anything at all,
-    gives a clean, accurate error at the point the bad value was supplied,
-    instead of a false "your terminal's encoding is wrong" diagnosis after
-    the fact.
+    actually worked.
+
+    Without the control-character/bidi/line-separator checks, `--decks-dir`/
+    `--state-dir` are printed raw (not `repr()`'d) in a comparable number of
+    places `add`/`remove`/`edit`/`sync` already print a deck name in --
+    `cmd_add`'s "added to {deck_path} ..." confirmation, `cmd_sync`'s
+    "no such directory: {decks_dir}", `_read_deck_text`'s ParseError message,
+    and more -- so a `--decks-dir` value containing an embedded ESC sequence
+    or a Trojan-Source RLO/LRO override reaches the terminal exactly the way
+    `_invalid_deck_name`'s own docstring describes for a deck name, just
+    through a sibling argument that never got the same guard. Checking here,
+    before `args.func` runs anything at all, gives a clean, accurate error at
+    the point the bad value was supplied, instead of a false "your terminal's
+    encoding is wrong" diagnosis after the fact (for a surrogate) or silent
+    hidden/reordered output (for a control character or bidi override).
     """
     for ch in value:
         if unicodedata.category(ch) == "Cs":
@@ -1157,6 +1170,22 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
                 f"U+{ord(ch):04X}, which can't be encoded to UTF-8 or used as a real "
                 "path at all -- this usually means invalid (non-UTF-8) byte data "
                 "reached flashback as a command-line argument)"
+            )
+        if unicodedata.category(ch) == "Cc":
+            return (
+                f"invalid {flag}: {value!r} (contains a control character {ch!r}, "
+                "which can hide or overwrite what's shown on screen)"
+            )
+        if unicodedata.bidirectional(ch) in BIDI_FORMATTING_CLASSES:
+            return (
+                f"invalid {flag}: {value!r} (contains a bidirectional-formatting "
+                f"character U+{ord(ch):04X}, which can reorder how surrounding text "
+                "is displayed on screen)"
+            )
+        if ch in LINE_SEPARATOR_CHARS:
+            return (
+                f"invalid {flag}: {value!r} (contains a Unicode line/paragraph "
+                f"separator U+{ord(ch):04X}, which displays as a line break)"
             )
     return None
 

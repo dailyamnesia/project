@@ -2547,5 +2547,59 @@ class TestDirArgSurrogateValidation(unittest.TestCase):
         self.assertNotIn("terminal", message)
 
 
+class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
+    """--decks-dir/--state-dir are printed raw (not repr()'d) in a comparable
+    number of places add/remove/edit/sync already print a deck name --
+    cmd_add's "added to {deck_path} ..." confirmation, cmd_sync's "no such
+    directory: {decks_dir}", _read_deck_text's ParseError message, and more --
+    so an embedded control character (e.g. an ESC clear-screen sequence) or a
+    Unicode bidirectional-formatting override (the "Trojan Source" family) can
+    hide or reorder what's shown on screen exactly the way _invalid_deck_name's
+    own docstring describes for a deck name, just through a sibling argument
+    that (before this fix) was only ever checked for an unpaired surrogate.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
+
+    def test_decks_dir_with_control_character_is_rejected_before_writing_the_card(self):
+        bad_decks_dir = os.path.join(self._tmp.name, "de\x1bcks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+
+        rc = main(
+            ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+        )
+
+        self.assertEqual(rc, 1)
+        # The whole point: fail before any file work happens, not with the
+        # card already saved and the raw ESC byte echoed in a success
+        # message.
+        self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_state_dir_with_bidi_override_is_rejected_before_creating_it(self):
+        decks_dir = Path(self._tmp.name) / "decks"
+        decks_dir.mkdir()
+        (decks_dir / "spanish.md").write_text("Q: hola?\nA: hello\n", encoding="utf-8")
+        bad_state_dir = os.path.join(self._tmp.name, "evil‮txt.exe")
+
+        rc = main(["--decks-dir", str(decks_dir), "--state-dir", bad_state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_state_dir))
+
+    def test_decks_dir_error_message_names_the_bidi_character(self):
+        bad_decks_dir = os.path.join(self._tmp.name, "evil‮txt.exe")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            rc = main(["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("bidirectional-formatting", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
