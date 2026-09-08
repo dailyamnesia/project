@@ -304,11 +304,25 @@ def _atomic_write_text(path: Path, data: str) -> None:
     to a sibling temp file and `os.replace`-ing it into place means a failed
     write only ever loses the disposable temp file — `path` itself is
     either the old content or the new content, never a partial one.
+
+    If `path` is itself a symlink (a deck file kept somewhere else and
+    linked into `decks_dir` -- e.g. a shared repo of deck content), the
+    temp file is written next to and replaces the *resolved target*, not
+    `path` itself. `os.replace` doesn't follow a symlink at its destination
+    -- it replaces that directory entry outright -- so writing to `path`
+    directly would silently sever the symlink on the very first add/
+    remove/edit, turning it into an ordinary, independent regular file
+    holding only this write's content, while the real target file (and
+    anything else pointing at it) is left disconnected and unaware of the
+    change. `path.is_symlink()` is false for a path that doesn't exist yet
+    (a brand new deck being created by `add`), so that case still creates
+    an ordinary file at `path`, unchanged from before.
     """
-    tmp_path = path.with_name(f".{path.name}.tmp{os.getpid()}")
+    target = path.resolve() if path.is_symlink() else path
+    tmp_path = target.with_name(f".{target.name}.tmp{os.getpid()}")
     try:
         tmp_path.write_text(data, encoding="utf-8")
-        os.replace(tmp_path, path)
+        os.replace(tmp_path, target)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise

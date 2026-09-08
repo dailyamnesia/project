@@ -89,6 +89,37 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(len(cards), 2)
         self.assertEqual(cards[1].question, "goodbye?")
 
+    @unittest.skipIf(os.name == "nt", "symlinked deck files aren't exercised on Windows")
+    def test_add_to_symlinked_deck_file_preserves_the_symlink(self):
+        # A deck file is allowed to be a symlink -- e.g. into a separate,
+        # shared repo of deck content that's kept outside `decks_dir`
+        # itself. `_atomic_write_text` writes the new content to a sibling
+        # temp file and `os.replace`s it into place; `os.replace` does NOT
+        # follow a symlink at the destination, it *replaces the symlink
+        # entry itself* -- so without special-casing this, the very first
+        # `add` to a symlinked deck file silently turns it into an ordinary,
+        # independent regular file. The real target file is left holding
+        # only the cards it had before, now permanently disconnected from
+        # decks_dir even though nothing printed a warning and `add`'s own
+        # success message still claims to have added to the same path.
+        real_dir = Path(self._tmp.name) / "shared"
+        real_dir.mkdir()
+        real_path = real_dir / "spanish-real.md"
+        real_path.write_text("Q: hello?\nA: hola\n", encoding="utf-8")
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        link_path = self.decks_dir / "spanish.md"
+        os.symlink(real_path, link_path)
+
+        rc = self.run_flashback("add", "spanish", "-q", "goodbye?", "-a", "adios")
+        self.assertEqual(rc, 0)
+
+        self.assertTrue(link_path.is_symlink(), "add replaced the symlink with a regular file")
+        self.assertEqual(os.path.realpath(link_path), os.path.realpath(real_path))
+
+        cards = parse_deck(real_path.read_text(encoding="utf-8"))
+        self.assertEqual([c.question for c in cards], ["hello?", "goodbye?"])
+
     def test_empty_question_fails_without_touching_file(self):
         rc = self.run_flashback("add", "spanish", "-q", "   ", "-a", "hola")
         self.assertEqual(rc, 1)
