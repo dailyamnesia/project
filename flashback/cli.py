@@ -448,7 +448,37 @@ def _read_deck_text(deck_path: Path) -> str:
     naming the actual problem. `"utf-8-sig"` strips a leading BOM if present and
     otherwise decodes identically to `"utf-8"`, so this is safe for every file, BOM or
     not.
+
+    Also refuses to read anything that isn't a regular file (following symlinks --
+    see `_atomic_write_text` for the symlinked-deck-file case this deliberately still
+    allows, since `Path.is_file()` resolves a symlink before checking its target's
+    type). A `--decks-dir` is documented as normal to hand-populate, and a FIFO
+    (named pipe) sitting there -- created by hand, by another program, or left
+    behind by some unrelated tool -- is a real, if unusual, way that can happen.
+    `open()` on a FIFO's read end blocks at the kernel level until some other
+    process opens its write end, forever if nothing ever does, so a plain
+    `read_text()` call here doesn't fail on one, it hangs the *entire* invocation
+    indefinitely: for `sync`, not just that one deck skipped but the whole run --
+    every other deck, including ones already synced and reported this run -- stuck
+    with no error, no timeout, and no way out short of killing the process by hand;
+    for `add`/`remove`/`edit`, which read one specific deck file with no "skip and
+    continue" option to fall back on, the same hang with nothing to show for it at
+    all. `Path.is_file()` is safe to check first because it's backed by `stat()`,
+    not `open()` -- stat-ing a FIFO returns instantly and reports its real type; only
+    actually opening one for an ordinary read blocks. (The identical failure shape,
+    a stray FIFO silently exhausting the one resource -- a thread, here a whole
+    process -- needed to serve everything else, already cost `journal`'s
+    `server.js` a full-site DoS from a single stray file, fixed in an earlier
+    session of this same project's rotation; this file never got the equivalent
+    check until now.)
     """
+    if not deck_path.is_file():
+        raise ParseError(
+            f"{deck_path} is not a regular file (it looks like a FIFO, device, "
+            "socket, or similar special file, or a directory) -- flashback only "
+            "reads plain deck files, since opening some special files for an "
+            "ordinary read can block forever instead of failing"
+        )
     try:
         return deck_path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
@@ -549,11 +579,12 @@ def cmd_sync(args):
                 continue
             deck_file = deck_files[0]
             try:
-                # utf-8-sig, not utf-8: strips a leading UTF-8 byte-order-mark if
-                # present (common from Notepad and various editors/export tools)
-                # instead of decoding it as a real character that then reads as
-                # text before the file's first "Q:" line — see _read_deck_text.
-                cards = parse_deck(deck_file.read_text(encoding="utf-8-sig"))
+                # _read_deck_text, not a raw deck_file.read_text(...): besides
+                # the BOM-stripping this used to inline here directly, it also
+                # refuses to actually open a FIFO/device/socket/directory
+                # sitting at this path instead of blocking sync's entire run
+                # forever on one — see that function's own docstring.
+                cards = parse_deck(_read_deck_text(deck_file))
             except (ParseError, UnicodeDecodeError, OSError) as exc:
                 # A deck file that isn't valid UTF-8, or isn't even a regular
                 # file (e.g. a directory happens to match *.md), is the same

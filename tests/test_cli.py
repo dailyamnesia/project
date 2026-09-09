@@ -2601,5 +2601,77 @@ class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
         self.assertIn("bidirectional-formatting", buf.getvalue())
 
 
+@unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo is POSIX-only, like the rest of this project's locking")
+class TestFifoDeckFileDoesNotHang(unittest.TestCase):
+    """`sync`/`add`/`remove`/`edit` all read a deck file with a plain
+    Path.read_text() (via _read_deck_text, or -- before this fix -- directly
+    in cmd_sync). A FIFO (named pipe) sitting at a *.md path -- created by
+    hand, by another program, or left behind by some unrelated tool; a
+    --decks-dir is documented as normal to hand-populate -- opens for read
+    instantly but doesn't return any data, or hit EOF, until some other
+    process opens its write end: forever, if nothing ever does. `open()`
+    blocking like that turns one stray file into a hang of the *entire*
+    invocation, not a per-deck skip the way an unreadable/non-UTF8 file
+    already gets -- for `sync` specifically, every other deck in the same
+    run, including ones already synced and reported before reaching this
+    one, is stuck behind it too, with no error and no timeout.
+
+    Each test below runs the real CLI call in a background thread with a
+    bounded join() instead of calling it directly, so a regression (the
+    call actually hanging) fails this test quickly instead of freezing the
+    whole suite -- the thread itself is left running in that case, but as a
+    daemon thread blocked in a single open() syscall with nothing left to
+    do, it doesn't do anything else, and dies with the process either way.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        _patch_lock_dir(self)
+        self.decks_dir = Path(self._tmp.name) / "decks"
+        self.state_dir = Path(self._tmp.name) / ".flashback"
+        self.decks_dir.mkdir()
+        os.mkfifo(self.decks_dir / "spanish.md")
+
+    def _run_with_timeout(self, *args, timeout=5):
+        """Run `main(args)` in a background thread; return its rc, or None
+        if it didn't finish within `timeout` seconds (i.e. it hung)."""
+        result = {}
+        buf = io.StringIO()
+
+        def target():
+            with redirect_stdout(buf), redirect_stderr(buf):
+                result["rc"] = main(
+                    ["--decks-dir", str(self.decks_dir), "--state-dir", str(self.state_dir), *args]
+                )
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+        self.assertFalse(thread.is_alive(), f"flashback {' '.join(args)} hung reading a FIFO deck file")
+        return result.get("rc"), buf.getvalue()
+
+    def test_sync_does_not_hang_on_a_fifo_deck_file(self):
+        rc, out = self._run_with_timeout("sync")
+        self.assertEqual(rc, 0)
+        self.assertIn("skipping", out)
+        self.assertIn("not a regular file", out)
+
+    def test_add_does_not_hang_reading_an_existing_fifo_deck_file(self):
+        rc, out = self._run_with_timeout("add", "spanish", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertIn("not a regular file", out)
+
+    def test_remove_does_not_hang_reading_a_fifo_deck_file(self):
+        rc, out = self._run_with_timeout("remove", "spanish", "-q", "hola?")
+        self.assertEqual(rc, 1)
+        self.assertIn("not a regular file", out)
+
+    def test_edit_does_not_hang_reading_a_fifo_deck_file(self):
+        rc, out = self._run_with_timeout("edit", "spanish", "-q", "hola?", "--new-answer", "hi")
+        self.assertEqual(rc, 1)
+        self.assertIn("not a regular file", out)
+
+
 if __name__ == "__main__":
     unittest.main()
