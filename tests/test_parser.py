@@ -317,6 +317,22 @@ class TestAppendCard(unittest.TestCase):
         with self.assertRaises(ParseError):
             append_card("", "question", "before after")
 
+    def test_question_with_unicode_tag_character_raises(self):
+        # U+E0000-U+E007F (the "Tags" block) has no visible glyph in any
+        # font — every code point is category Cf, same as the legitimate
+        # ZWJ/variation selectors an emoji relies on, so it isn't caught by
+        # the Cc check, and it doesn't reorder anything, so the bidi check
+        # doesn't catch it either. Left unchecked, it rides along invisibly
+        # inside a question that looks perfectly ordinary on screen — an
+        # entire hidden secondary message with zero trace in what
+        # `review`/`edit` display.
+        with self.assertRaises(ParseError):
+            append_card("", f"question{chr(0xE0041)}", "answer")
+
+    def test_answer_with_unicode_tag_character_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "question", f"answer{chr(0xE007F)}")
+
     def test_hand_edited_line_separator_would_silently_change_the_question_on_reparse(self):
         # Demonstrates the actual failure this check exists to prevent:
         # bypass validation (the same way parse_deck's own `validate=False`

@@ -18,6 +18,7 @@ from .parser import (
     LINE_SEPARATOR_CHARS,
     ParseError,
     _check_card_text,
+    _is_unicode_tag_char,
     append_card,
     edit_card,
     normalize_question,
@@ -148,6 +149,17 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     cause) blames the terminal's output encoding and suggests a UTF-8 locale.
     No locale setting fixes an unpaired surrogate; catching it here instead
     gives a clean, accurate error at the point the bad name was supplied.
+
+    A Unicode "Tags" block character (U+E0000-U+E007F, see
+    `_is_unicode_tag_char` in `parser.py`) has the same "looks the same,
+    isn't" risk here as it does in card text: it has no visible glyph in
+    any font, so two decks whose names read identically on screen (in
+    `sync`'s deck listing, `add`'s confirmation, `--deck`'s filter) could
+    actually be different names underneath, and a `--deck` value typed to
+    match what's displayed would silently fail to match the deck it looks
+    identical to. Same narrow-range check as `_check_card_text` uses, for
+    the same reason a blanket Cf rejection would wrongly catch legitimate
+    ZWJ/variation-selector characters in an emoji-bearing deck name.
     """
     if "/" in name or "\\" in name:
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
@@ -177,6 +189,12 @@ def _invalid_deck_name(name: str) -> Optional[str]:
                 f"invalid deck name: {name!r} (contains a Unicode line/paragraph "
                 f"separator U+{ord(ch):04X}, which displays as a line break and "
                 "breaks stats's tabular layout)"
+            )
+        if _is_unicode_tag_char(ch):
+            return (
+                f"invalid deck name: {name!r} (contains a Unicode tag character "
+                f"U+{ord(ch):04X}, which has no visible glyph in any font and can "
+                "make two visually-identical deck names actually differ)"
             )
     return None
 

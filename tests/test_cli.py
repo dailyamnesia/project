@@ -403,6 +403,21 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_unicode_tag_character_is_rejected(self):
+        # A Unicode "Tags" block character (U+E0000-U+E007F) has no visible
+        # glyph in any font — it's category Cf, same as the ZWJ/variation
+        # selectors a legitimate emoji-bearing deck name relies on, so
+        # neither the Cc check nor a blanket Cf rejection catches (or should
+        # catch) it. Without this check, two decks whose names print
+        # identically in `sync`'s listing could actually be different names
+        # underneath, and a `--deck` value typed to match what's displayed
+        # would silently fail to match the deck it looks identical to — the
+        # same "looks the same, isn't" risk this check already blocks for
+        # card text via parser.py's `_is_unicode_tag_char`.
+        rc = self.run_flashback("add", f"evil{chr(0xE0041)}deck", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_unpaired_surrogate_is_rejected_without_writing_file(self):
         # Same failure shape as the deck-name case above, just for card text:
         # caught here as a clean ParseError instead of crashing later in

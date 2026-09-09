@@ -40,6 +40,25 @@ BIDI_FORMATTING_CLASSES = frozenset(
 # like a real "\n". See _check_card_text for the consequence.
 LINE_SEPARATOR_CHARS = frozenset({" ", " "})
 
+# Unicode's "Tags" block. Originally meant for invisible language tagging, a
+# use Unicode itself deprecated -- every code point in this block is defined
+# with no visible glyph in any conformant font, so in modern practice the
+# block is used almost exclusively to smuggle an entirely invisible
+# secondary message inside text that otherwise looks perfectly ordinary on
+# screen (the mechanism behind "ASCII smuggling"/hidden-prompt payloads).
+# Like the bidi-override characters above, these aren't in the Cc category
+# (so the control-character check doesn't catch them), and they're category
+# Cf, same as the ZWJ/variation selectors legitimate emoji rely on (so a
+# blanket Cf rejection would be wrong here too, exactly as explained above
+# for bidi) -- but unlike a bidi override, which only *reorders* visible
+# characters, a tag character hides content outright, with zero trace in
+# what's actually displayed. See _check_card_text for the consequence.
+UNICODE_TAG_RANGE = (0xE0000, 0xE007F)
+
+
+def _is_unicode_tag_char(ch: str) -> bool:
+    return UNICODE_TAG_RANGE[0] <= ord(ch) <= UNICODE_TAG_RANGE[1]
+
 
 def normalize_question(question: str) -> str:
     """Normalize a question to NFC so it compares equal regardless of how its
@@ -301,6 +320,21 @@ def _check_card_text(question: str, answer: str) -> None:
     the underlying byte sequence it came from was never valid Unicode text to
     begin with. Catching it here instead gives a clean, accurate ParseError
     at the point the bad content was actually supplied.
+
+    A fifth case: Unicode's "Tags" block (U+E0000-U+E007F, see
+    UNICODE_TAG_RANGE) isn't a control character (so the Cc check doesn't
+    catch it) and doesn't reorder anything (so the Bidi check doesn't
+    either), but it's worse than either: every code point in the block has
+    no visible glyph in any conformant font, so text built from it rides
+    along completely invisibly inside a question or answer that still looks
+    perfectly ordinary on screen -- an entire hidden secondary message with
+    zero trace in what `review`/`edit` actually display, and (since it's
+    real, distinct text, not a rendering trick) enough to make what looks
+    like the exact same question `remove`/`edit` were given fail to match a
+    card that's genuinely sitting right there, the same "looks the same,
+    isn't" gap `normalize_question` closes for differently-normalized
+    accents, just via invisible extra characters instead of a different
+    encoding of the same visible ones.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -344,6 +378,13 @@ def _check_card_text(question: str, answer: str) -> None:
                     f"{ord(ch):04X}), which flashback's parser treats as a line break just "
                     "like a real newline -- this would silently change the card's stored text "
                     "on the next sync"
+                )
+            if _is_unicode_tag_char(ch):
+                raise ParseError(
+                    f"{field_name} contains a Unicode tag character (U+{ord(ch):04X}), which "
+                    "has no visible glyph in any font and can hide an entire invisible message "
+                    "inside text that looks perfectly ordinary on screen -- not allowed in card "
+                    "text"
                 )
 
 
