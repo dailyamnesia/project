@@ -2572,6 +2572,13 @@ class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
     hide or reorder what's shown on screen exactly the way _invalid_deck_name's
     own docstring describes for a deck name, just through a sibling argument
     that (before this fix) was only ever checked for an unpaired surrogate.
+
+    Also covers a Unicode "Tags" block character (U+E0000-U+E007F, see
+    parser._is_unicode_tag_char): _invalid_deck_name already rejects one in a
+    deck name because it has no visible glyph in any font, so two names that
+    print identically can secretly differ underneath -- _invalid_dir_arg was
+    never given the matching check, so the identical "looks the same but
+    isn't" gap existed for --decks-dir/--state-dir too, until now.
     """
 
     def setUp(self):
@@ -2614,6 +2621,51 @@ class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertIn("bidirectional-formatting", buf.getvalue())
+
+    def test_decks_dir_with_unicode_tag_character_is_rejected_before_writing_the_card(self):
+        # A Unicode "Tags" block character (U+E0000-U+E007F) has no visible
+        # glyph in any font, so it doesn't corrupt display the way a control
+        # character or bidi override does -- but _invalid_deck_name already
+        # rejects it in a deck *name* for exactly this reason: two names that
+        # print identically can secretly be different strings underneath.
+        # _invalid_dir_arg was never given the same check, so two
+        # --decks-dir values that look byte-for-byte identical on screen
+        # (one plain, one with an invisible tag character spliced in) were
+        # silently accepted as two different real directories -- reproduced
+        # directly against the unfixed code: `main()` returned 0 for both,
+        # each creating its own directory/state, with no error hinting the
+        # second one wasn't the same path the first one appeared to be.
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0xE0041)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+
+        rc = main(
+            ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_state_dir_with_unicode_tag_character_is_rejected_before_creating_it(self):
+        decks_dir = Path(self._tmp.name) / "decks"
+        decks_dir.mkdir()
+        (decks_dir / "spanish.md").write_text("Q: hola?\nA: hello\n", encoding="utf-8")
+        bad_state_dir = os.path.join(self._tmp.name, f".flashback{chr(0xE0041)}")
+
+        rc = main(["--decks-dir", str(decks_dir), "--state-dir", bad_state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_state_dir))
+
+    def test_decks_dir_error_message_names_the_tag_character(self):
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0xE0041)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            rc = main(["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("Unicode tag character", buf.getvalue())
 
 
 @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo is POSIX-only, like the rest of this project's locking")

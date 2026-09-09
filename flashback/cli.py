@@ -1168,7 +1168,8 @@ def build_parser():
 def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
     """Return an error message if `value` (a --decks-dir/--state-dir argument)
     contains an unpaired Unicode surrogate, control character, bidirectional-
-    formatting character, or Unicode line/paragraph separator, else None.
+    formatting character, Unicode line/paragraph separator, or Unicode "Tags"
+    block character, else None.
 
     `_invalid_deck_name` and `_check_card_text` already reject these same kinds
     of characters in deck names and card text, for the reasons spelled out at
@@ -1211,6 +1212,19 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
     the point the bad value was supplied, instead of a false "your terminal's
     encoding is wrong" diagnosis after the fact (for a surrogate) or silent
     hidden/reordered output (for a control character or bidi override).
+
+    Also missing until now: `_invalid_deck_name`'s Unicode "Tags" block check
+    (`_is_unicode_tag_char`, U+E0000-U+E007F). Every code point in that block
+    has no visible glyph in any conformant font, so it doesn't corrupt display
+    the way a control character or bidi override does -- but it means two
+    `--decks-dir`/`--state-dir` values that read as exactly the same path on
+    screen (in a shell prompt, a script, this tool's own "no such directory:
+    {decks_dir}"/"added to {deck_path} ..." messages) can silently be two
+    different real paths, each with its own directory, deck files, and
+    review database, underneath -- the identical "looks the same but isn't"
+    failure `_invalid_deck_name` already exists to prevent for a deck name,
+    just reached through a sibling argument that was never given the same
+    check when this function was first added.
     """
     for ch in value:
         if unicodedata.category(ch) == "Cs":
@@ -1235,6 +1249,12 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
             return (
                 f"invalid {flag}: {value!r} (contains a Unicode line/paragraph "
                 f"separator U+{ord(ch):04X}, which displays as a line break)"
+            )
+        if _is_unicode_tag_char(ch):
+            return (
+                f"invalid {flag}: {value!r} (contains a Unicode tag character "
+                f"U+{ord(ch):04X}, which has no visible glyph in any font and can "
+                "make two visually-identical paths actually differ)"
             )
     return None
 
