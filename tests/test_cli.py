@@ -655,6 +655,31 @@ class TestRemoveCommand(unittest.TestCase):
         rc = self.run_flashback("remove", "no-such-deck", "-q", "hello?")
         self.assertEqual(rc, 1)
 
+    def test_deck_file_deleted_while_prompting_for_question_fails_with_accurate_message(self):
+        # `remove`'s existence check runs before the (possibly interactive)
+        # `-q` prompt, then the file is read again for real inside
+        # `_deck_lock` afterward -- a window in which another process (a
+        # concurrent `remove` + `sync`, or a person deleting the file by
+        # hand) can delete the deck file entirely. `_read_deck_text` used to
+        # blame this on the file being "a FIFO, device, socket, or similar
+        # special file, or a directory" -- the same message a FIFO gets --
+        # which is simply false when the real cause is that the path no
+        # longer exists at all.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        deck_path = self.decks_dir / "spanish.md"
+
+        def fake_input(prompt):
+            deck_path.unlink()
+            return "hello?"
+
+        out = io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stderr(out):
+            rc = self.run_flashback("remove", "spanish")
+        self.assertEqual(rc, 1)
+        message = out.getvalue()
+        self.assertIn("no longer exists", message)
+        self.assertNotIn("FIFO", message)
+
     def test_no_matching_question_fails_without_touching_file(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
         deck_path = self.decks_dir / "spanish.md"
@@ -852,6 +877,41 @@ class TestEditCommand(unittest.TestCase):
     def test_missing_deck_file_fails(self):
         rc = self.run_flashback("edit", "no-such-deck", "-q", "hello?", "--new-answer", "x")
         self.assertEqual(rc, 1)
+
+    def test_deck_file_deleted_during_interactive_prompt_fails_with_accurate_message(self):
+        # cmd_edit's own docstring notes that existing_text is deliberately
+        # re-read fresh, inside the lock, rather than reusing the text read
+        # for the preview -- "the interactive prompting in between can take
+        # arbitrarily long, and the file may have changed since preview_text
+        # was read". A concurrent process (or a person by hand) deleting the
+        # deck file during that window is exactly the race that comment
+        # anticipates, but the resulting error used to misdiagnose the
+        # cause: _read_deck_text blamed a missing file on being "a FIFO,
+        # device, socket, or similar special file, or a directory" -- the
+        # same wording a FIFO gets -- which is false when the file simply
+        # isn't there anymore.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        deck_path = self.decks_dir / "spanish.md"
+
+        prompted = []
+
+        def fake_input(prompt):
+            prompted.append(prompt)
+            if len(prompted) == 1:
+                # about to answer "new Q (blank to keep): " -- simulate
+                # another process deleting the deck file while the user is
+                # still sitting at this prompt.
+                deck_path.unlink()
+                return ""
+            return "hola!"
+
+        out = io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stdout(out), redirect_stderr(out):
+            rc = self.run_flashback("edit", "spanish", "-q", "hello?")
+        self.assertEqual(rc, 1)
+        message = out.getvalue()
+        self.assertIn("no longer exists", message)
+        self.assertNotIn("FIFO", message)
 
     def test_no_matching_question_fails_without_touching_file(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")

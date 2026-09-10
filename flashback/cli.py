@@ -489,7 +489,28 @@ def _read_deck_text(deck_path: Path) -> str:
     `server.js` a full-site DoS from a single stray file, fixed in an earlier
     session of this same project's rotation; this file never got the equivalent
     check until now.)
+
+    Checks non-existence separately from, and before, that same `Path.is_file()`
+    call -- a missing path also makes `is_file()` return False, exactly like a
+    FIFO/device/socket/directory does, so folding the two into one check-and-raise
+    (as this used to) blames a deck file that simply isn't there anymore on being
+    "a FIFO, device, socket, or similar special file, or a directory", which is
+    false and actively misleading for this cause. `remove`/`edit` both call this
+    a second time, inside `_deck_lock`, after already confirming the file existed
+    once earlier in the same command -- `edit` right after an interactive prompt
+    for the new question/answer text that can, per its own docstring, "take
+    arbitrarily long", and `remove` right after its own prompt for `-q` when it's
+    omitted -- so another process (a concurrent `remove` + `sync`, or a person
+    deleting the file by hand) deleting the deck file in that window is a real,
+    reachable sequence, not a hypothetical: the earlier existence check has
+    already passed by the time it happens, and nothing about a FIFO, device,
+    socket, or directory was ever involved.
     """
+    if not deck_path.exists():
+        raise ParseError(
+            f"{deck_path} no longer exists -- it may have been deleted (by hand, or "
+            "by another flashback invocation) since this command started"
+        )
     if not deck_path.is_file():
         raise ParseError(
             f"{deck_path} is not a regular file (it looks like a FIFO, device, "
