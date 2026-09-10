@@ -120,6 +120,38 @@ class TestAddCommand(unittest.TestCase):
         cards = parse_deck(real_path.read_text(encoding="utf-8"))
         self.assertEqual([c.question for c in cards], ["hello?", "goodbye?"])
 
+    @unittest.skipIf(os.name == "nt", "symlinked deck files aren't exercised on Windows")
+    def test_add_to_self_referential_symlink_deck_file_fails_cleanly(self):
+        # A deck file is allowed to be a symlink (see the preceding test) --
+        # but nothing stops that symlink from being a loop: pointing at
+        # itself, directly or through a chain, rather than at a real file.
+        # That's a real, reachable filesystem state -- a hand-typed `ln -s`
+        # typo, or two half-finished scripts each linking the other's
+        # output -- not just a hypothetical.
+        #
+        # `deck_path.exists()` correctly reports False for a loop (a plain
+        # OSError(ELOOP) from stat(), which pathlib treats the same as "not
+        # there"), so `add` correctly treats it as "no existing content to
+        # read" and tries to create the file, same as it would for a broken
+        # symlink. But `_atomic_write_text` then calls `path.resolve()` to
+        # find the real target to write through -- and `Path.resolve()`
+        # does its own, separate cycle detection and raises a bare
+        # `RuntimeError("Symlink loop from ...")`, not an `OSError`, when it
+        # finds one. That isn't caught by main()'s `except OSError` handler
+        # (the one that already gives a clean message for the sibling
+        # broken-symlink case), so it used to crash with a raw traceback
+        # exposing local paths instead of a one-line error.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        link_path = self.decks_dir / "spanish.md"
+        os.symlink(link_path, link_path)
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err.getvalue())
+        self.assertIn("symlink loop", err.getvalue().lower())
+
     def test_empty_question_fails_without_touching_file(self):
         rc = self.run_flashback("add", "spanish", "-q", "   ", "-a", "hola")
         self.assertEqual(rc, 1)

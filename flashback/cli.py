@@ -335,8 +335,29 @@ def _atomic_write_text(path: Path, data: str) -> None:
     change. `path.is_symlink()` is false for a path that doesn't exist yet
     (a brand new deck being created by `add`), so that case still creates
     an ordinary file at `path`, unchanged from before.
+
+    A symlink that loops back on itself (directly, e.g. `ln -s spanish.md
+    spanish.md`, or through a longer chain) is a real, reachable filesystem
+    state -- a typo'd `ln -s`, or two half-finished scripts each linking the
+    other's output -- not just a hypothetical, and `path.exists()` (used
+    earlier, e.g. by `add`, to decide there's no existing content to read)
+    correctly reports False for one, the same as it does for an ordinary
+    broken symlink. But `Path.resolve()` does its own, separate cycle
+    detection and raises a bare `RuntimeError("Symlink loop from ...")`, not
+    an `OSError`, when it finds one -- unlike every other real filesystem
+    failure in this function (a missing parent directory, permissions),
+    which surfaces as an `OSError` that `main`'s existing handler already
+    turns into a clean, one-line message. Without catching it here and
+    re-raising as `OSError`, a symlink-loop deck file crashed with a raw
+    traceback exposing local paths instead.
     """
-    target = path.resolve() if path.is_symlink() else path
+    if path.is_symlink():
+        try:
+            target = path.resolve()
+        except RuntimeError as exc:
+            raise OSError(f"{path} is a symlink loop -- can't resolve it to a real file") from exc
+    else:
+        target = path
     tmp_path = target.with_name(f".{target.name}.tmp{os.getpid()}")
     try:
         tmp_path.write_text(data, encoding="utf-8")
