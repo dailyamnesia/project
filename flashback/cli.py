@@ -693,6 +693,26 @@ def cmd_add(args):
     answer = args.answer if args.answer is not None else input("A: ")
 
     with _deck_lock(_deck_lock_path(decks_dir, args.deck), Path(args.state_dir)):
+        # Re-check for a collision now, not just once before the interactive
+        # question/answer prompts above: those prompts (like edit's, per its
+        # own docstring) can take arbitrarily long, and a second, colliding
+        # deck file (e.g. a hand-created or hand-renamed one -- see
+        # _find_deck_path's own docstring for how that happens) can appear in
+        # that window. Without this, `deck_path` above -- picked while there
+        # was still only one candidate file (or none at all) -- goes stale.
+        collision_error = _check_deck_collision(decks_dir, args.deck)
+        if collision_error:
+            print(f"error: {collision_error}", file=sys.stderr)
+            return 1
+        # Also re-resolve deck_path itself, not just the collision check: if
+        # this deck had *no* file yet when deck_path was guessed above, and
+        # exactly one now exists (created by hand, or by another process,
+        # during the prompts), the guessed path and the real file are two
+        # different paths -- neither one a "collision" by _check_deck_collision's
+        # own definition, since only one file exists either way -- so without
+        # this, `add` would still silently create a second, unrelated file at
+        # the stale guessed path instead of appending to the real one.
+        deck_path = _find_deck_path(decks_dir, args.deck)
         try:
             existing_text = _read_deck_text(deck_path) if deck_path.exists() else ""
             new_text = append_card(existing_text, question, answer)
@@ -725,6 +745,14 @@ def cmd_remove(args):
     question = args.question if args.question is not None else input("Q: ")
 
     with _deck_lock(_deck_lock_path(decks_dir, args.deck), Path(args.state_dir)):
+        # Re-check for a collision now, not just once before the (possibly
+        # interactive, possibly long) -q prompt above -- see cmd_add's
+        # identical re-check for why a second, colliding deck file appearing
+        # in that window can't be caught by the earlier check alone.
+        collision_error = _check_deck_collision(decks_dir, args.deck)
+        if collision_error:
+            print(f"error: {collision_error}", file=sys.stderr)
+            return 1
         try:
             existing_text = _read_deck_text(deck_path)
             new_text = remove_card(existing_text, question)
@@ -807,6 +835,15 @@ def cmd_edit(args):
     # must act on the current on-disk content, not a stale snapshot from
     # before the prompts.
     with _deck_lock(_deck_lock_path(decks_dir, args.deck), Path(args.state_dir)):
+        # Re-check for a collision now, not just once before the interactive
+        # prompts above -- see cmd_add's identical re-check for why a second,
+        # colliding deck file appearing during that (potentially arbitrarily
+        # long, per this function's own docstring) window can't be caught by
+        # the earlier check alone.
+        collision_error = _check_deck_collision(decks_dir, args.deck)
+        if collision_error:
+            print(f"error: {collision_error}", file=sys.stderr)
+            return 1
         try:
             existing_text = _read_deck_text(deck_path)
             new_text = edit_card(existing_text, question, new_question=new_question, new_answer=new_answer)

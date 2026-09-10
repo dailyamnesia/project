@@ -254,6 +254,76 @@ class TestAddCommand(unittest.TestCase):
         self.assertIn(ascii(str(nfc_path)), message)
         self.assertIn(ascii(str(nfd_path)), message)
 
+    def test_refuses_when_a_colliding_file_appears_during_the_interactive_prompt(self):
+        # `_check_deck_collision` above only runs once, before the (possibly
+        # interactive, possibly arbitrarily long -- see cmd_edit's own
+        # docstring for why that's not hypothetical) `-q`/`-a` prompts. A
+        # second, colliding deck file -- hand-created, or written by another
+        # flashback invocation entirely, both explicitly normal per
+        # `_find_deck_path`'s own docstring -- can appear in that window,
+        # after the one-time check already passed. Without a fresh check
+        # right before the write, `add` would go on to use the now-stale
+        # `deck_path` computed before the second file existed, writing a
+        # brand new, unrelated file for this deck name instead of refusing
+        # the way it already does when the collision exists from the start.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        established = self.decks_dir / f"{nfc}.md"
+        established.write_text("Q: uno\nA: one\n", encoding="utf-8")
+
+        def fake_input(prompt):
+            (self.decks_dir / f"{nfd}.md").write_text("Q: tres\nA: three\n", encoding="utf-8")
+            return "dos?" if prompt == "Q: " else "two"
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback("add", nfc)
+        self.assertEqual(rc, 1)
+        self.assertIn("collide", err.getvalue())
+
+        # Neither the established file nor the newly-appeared one was
+        # touched -- add must not guess which one "wins".
+        self.assertEqual(established.read_text(encoding="utf-8"), "Q: uno\nA: one\n")
+        self.assertEqual(
+            (self.decks_dir / f"{nfd}.md").read_text(encoding="utf-8"), "Q: tres\nA: three\n"
+        )
+        self.assertEqual(len(list(self.decks_dir.glob("*.md"))), 2)
+
+    def test_appends_to_a_file_that_appears_during_the_interactive_prompt_instead_of_duplicating_it(self):
+        # The narrower sibling of the case above: this deck has *no* file at
+        # all when `add` starts (so the one-time collision check, and
+        # `_find_deck_path`'s own guessed path, both see zero candidates),
+        # but exactly one appears -- hand-created, or by another process --
+        # during the prompts. That's not a collision by `_check_deck_collision`'s
+        # own definition (only one file exists either way), but the guessed
+        # path computed before the file existed is now simply wrong: without
+        # re-resolving it fresh, `add` would silently create a *second*,
+        # unrelated file at the stale guessed path instead of appending to
+        # the real one that just appeared, with a cheerful "added to ..."
+        # message giving no hint that anything went wrong.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        def fake_input(prompt):
+            self.decks_dir.mkdir(parents=True, exist_ok=True)
+            (self.decks_dir / f"{nfd}.md").write_text("Q: uno\nA: one\n", encoding="utf-8")
+            return "dos?" if prompt == "Q: " else "two"
+
+        with patch("builtins.input", side_effect=fake_input):
+            rc = self.run_flashback("add", nfc)
+        self.assertEqual(rc, 0)
+
+        md_files = sorted(self.decks_dir.glob("*.md"))
+        self.assertEqual(
+            len(md_files), 1, f"expected one deck file, got {[f.name for f in md_files]}"
+        )
+        cards = parse_deck(md_files[0].read_text(encoding="utf-8"))
+        self.assertEqual([c.question for c in cards], ["uno", "dos?"])
+
     def test_deck_name_with_leading_or_trailing_whitespace_is_the_same_deck(self):
         # _normalize_deck_name NFC-normalized a deck name but never stripped
         # surrounding whitespace, unlike question/answer text — so a plain
@@ -680,6 +750,36 @@ class TestRemoveCommand(unittest.TestCase):
         self.assertIn("no longer exists", message)
         self.assertNotIn("FIFO", message)
 
+    def test_refuses_when_a_colliding_file_appears_during_the_interactive_prompt(self):
+        # `_check_deck_collision` runs once, before the (possibly
+        # interactive) `-q` prompt -- but a second, colliding deck file
+        # (hand-created, or written by an unrelated process; both explicitly
+        # normal per `_find_deck_path`'s own docstring) can appear while
+        # `remove` is sitting at that prompt. Without a fresh check right
+        # before the write, `remove` would silently go on to modify the one
+        # file it already knew about, leaving the deck in a now-colliding
+        # state with no warning at all in its own "removed from ..."
+        # success message -- even though invoking `remove` fresh at that
+        # point would refuse immediately.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        established = self.decks_dir / f"{nfc}.md"
+        established.write_text("Q: hola\nA: hello\n", encoding="utf-8")
+
+        def fake_input(prompt):
+            (self.decks_dir / f"{nfd}.md").write_text("Q: adios\nA: bye\n", encoding="utf-8")
+            return "hola"
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback("remove", nfc)
+        self.assertEqual(rc, 1)
+        self.assertIn("collide", err.getvalue())
+        self.assertEqual(established.read_text(encoding="utf-8"), "Q: hola\nA: hello\n")
+
     def test_no_matching_question_fails_without_touching_file(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
         deck_path = self.decks_dir / "spanish.md"
@@ -912,6 +1012,48 @@ class TestEditCommand(unittest.TestCase):
         message = out.getvalue()
         self.assertIn("no longer exists", message)
         self.assertNotIn("FIFO", message)
+
+    def test_refuses_when_a_colliding_file_appears_during_the_interactive_prompt(self):
+        # Same race as the deletion case just above, but for a colliding
+        # file appearing instead of the deck file disappearing: `edit`'s
+        # one-time `_check_deck_collision`, run before the interactive
+        # prompts, can't see a second, colliding deck file (hand-created, or
+        # written by an unrelated process -- both explicitly normal per
+        # `_find_deck_path`'s own docstring) that appears while `edit` is
+        # sitting at one of those prompts. Without a fresh check right
+        # before the write, `edit` would silently go on to modify the file
+        # it already knew about, leaving the deck in a now-colliding state
+        # with no warning in its own "edited in ..." success message.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        established = self.decks_dir / f"{nfc}.md"
+        established.write_text("Q: hola\nA: hello\n", encoding="utf-8")
+
+        prompted = []
+
+        def fake_input(prompt):
+            prompted.append(prompt)
+            if len(prompted) == 1:
+                # about to answer "new Q (blank to keep): " -- simulate
+                # another process/person creating a colliding deck file
+                # while still sitting at this prompt.
+                (self.decks_dir / f"{nfd}.md").write_text("Q: adios\nA: bye\n", encoding="utf-8")
+                return ""
+            return "hi"
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stdout(out), redirect_stderr(err):
+            # Neither --new-question nor --new-answer given, so cmd_edit goes
+            # interactive and prompts for both -- the "new A" answer ("hi")
+            # is what would have been written, had the fresh recheck not
+            # caught the collision first.
+            rc = self.run_flashback("edit", nfc, "-q", "hola")
+        self.assertEqual(rc, 1)
+        self.assertIn("collide", err.getvalue())
+        self.assertEqual(established.read_text(encoding="utf-8"), "Q: hola\nA: hello\n")
 
     def test_no_matching_question_fails_without_touching_file(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
