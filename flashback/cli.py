@@ -708,6 +708,20 @@ def cmd_add(args):
         print(f"error: {collision_error}", file=sys.stderr)
         return 1
     deck_path = _find_deck_path(decks_dir, args.deck)
+    # ensure_state_dir(state_dir) before decks_dir.mkdir(...), not after: when
+    # --decks-dir and --state-dir happen to be the same not-yet-existing
+    # directory (a real, anticipated configuration -- see _deck_lock_path's
+    # and ensure_state_dir's own docstrings, both of which single out
+    # `--state-dir .` by name), decks_dir.mkdir(...) would otherwise bring
+    # that shared directory into existence first. _deck_lock below calls
+    # ensure_state_dir(state_dir) again to seed --state-dir's .gitignore, but
+    # by then it would no longer look "new", so the .gitignore protection
+    # ensure_state_dir exists to provide would silently never fire for this
+    # deck's very first add. Calling it here first -- before decks_dir can
+    # possibly create the same path -- makes the order state_dir/decks_dir
+    # are actually brought into existence match what "is this state_dir new"
+    # is supposed to mean, regardless of whether the two paths coincide.
+    ensure_state_dir(Path(args.state_dir))
     decks_dir.mkdir(parents=True, exist_ok=True)
 
     question = args.question if args.question is not None else input("Q: ")

@@ -415,6 +415,31 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual((self.state_dir / ".gitignore").read_text(encoding="utf-8"), "*\n")
 
+    def test_add_seeds_state_dir_gitignore_even_when_state_dir_is_the_decks_dir(self):
+        # `--decks-dir . --state-dir .` (or any other spelling that makes the
+        # two coincide) is a real, anticipated configuration -- ensure_state_dir's
+        # own docstring and _deck_lock_path's docstring both single out
+        # `--state-dir .` by name as a real reason two flashback invocations
+        # can share -- or a single invocation's --decks-dir/--state-dir can
+        # themselves be -- the very same directory, not just a hypothetical.
+        #
+        # `cmd_add` creates a brand-new --decks-dir itself, via
+        # `decks_dir.mkdir(...)`, *before* ever entering `_deck_lock` -- the
+        # one place that seeds --state-dir's .gitignore via `ensure_state_dir`.
+        # When the two paths are the same not-yet-existing directory, that
+        # earlier mkdir has already brought it into existence by the time
+        # `ensure_state_dir` gets to ask "is this --state-dir new?", so the
+        # answer comes back "no" even though, from --state-dir's own
+        # perspective, this is genuinely the first time it's ever been
+        # touched -- silently skipping the exact .gitignore protection
+        # ensure_state_dir exists to provide, right when a freshly-created,
+        # git-committable directory needs it most.
+        shared = Path(self._tmp.name) / "shared"
+        self.assertFalse(shared.exists())
+        rc = main(["--decks-dir", str(shared), "--state-dir", str(shared), "add", "spanish", "-q", "hello?", "-a", "hola"])
+        self.assertEqual(rc, 0)
+        self.assertEqual((shared / ".gitignore").read_text(encoding="utf-8"), "*\n")
+
     def test_deck_name_with_slash_is_rejected_instead_of_landing_outside_decks_dir(self):
         # A slash either escapes decks-dir (`../x`) or lands somewhere `sync`'s
         # non-recursive glob never looks (`x/y`) — either way the card would look
