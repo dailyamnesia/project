@@ -319,8 +319,17 @@ otherwise.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests -b
 ```
+
+Several tests exercise the CLI directly (`main([...])`) rather than through a
+subprocess, and only wrap it in `redirect_stdout` where a test actually reads
+the output — the rest print straight to the real stdout the same as running
+`flashback` by hand would. Without `-b`/`--buffer`, that means the plain
+`python3 -m unittest discover -s tests` command buries its own pass/fail
+summary under a wall of real CLI output (`added to ...`, `N cards synced`,
+and so on); `-b` makes unittest capture each test's stdout/stderr and only
+show it for a test that actually fails.
 
 No external dependencies are needed to run the tool or its test suite —
 everything is Python's standard library (`sqlite3`, `argparse`, `re`,
