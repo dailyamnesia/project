@@ -774,6 +774,18 @@ def cmd_remove(args):
         if collision_error:
             print(f"error: {collision_error}", file=sys.stderr)
             return 1
+        # Also re-resolve deck_path itself, not just the collision check: the
+        # file backing this deck name can be renamed (e.g. to a different
+        # Unicode normalization form of the same accented name -- see
+        # _find_deck_path's own docstring) during the -q prompt above without
+        # ever becoming a "collision" by _check_deck_collision's own
+        # definition, since only one file exists either way. Without this,
+        # `remove` would read the now-stale `deck_path` computed before the
+        # rename, see it's gone, and wrongly report "no longer exists" for a
+        # deck that's still very much there under its new on-disk name --
+        # exactly the staleness cmd_add's identical re-resolve already
+        # guards against.
+        deck_path = _find_deck_path(decks_dir, args.deck)
         try:
             existing_text = _read_deck_text(deck_path)
             new_text = remove_card(existing_text, question)
@@ -812,6 +824,16 @@ def cmd_edit(args):
     # fail this pre-lookup and error out before ever reaching edit_card(),
     # the same gap that used to exist here for surrounding whitespace.
     question = normalize_question((args.question if args.question is not None else input("Q: ")).strip())
+
+    # Re-resolve deck_path itself, not just reuse the guess from before this
+    # (possibly interactive, possibly long) -q prompt: the file backing this
+    # deck name can be renamed in that window -- e.g. to a different Unicode
+    # normalization form of the same accented name, see _find_deck_path's own
+    # docstring -- without ever becoming a "collision" (only one file exists
+    # either way). Without this, the preview read just below would use the
+    # now-stale path, see it's gone, and wrongly report "no longer exists"
+    # for a deck that's still there under its new on-disk name.
+    deck_path = _find_deck_path(decks_dir, args.deck)
 
     try:
         preview_text = _read_deck_text(deck_path)
@@ -865,6 +887,12 @@ def cmd_edit(args):
         if collision_error:
             print(f"error: {collision_error}", file=sys.stderr)
             return 1
+        # Re-resolve deck_path again here too, for the identical reason as
+        # the re-resolve before the preview read above: the (possibly
+        # arbitrarily long, per this function's own docstring) new-question/
+        # new-answer prompts are a second window in which the file can be
+        # renamed without tripping the collision check just above.
+        deck_path = _find_deck_path(decks_dir, args.deck)
         try:
             existing_text = _read_deck_text(deck_path)
             new_text = edit_card(existing_text, question, new_question=new_question, new_answer=new_answer)

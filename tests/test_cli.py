@@ -812,6 +812,41 @@ class TestRemoveCommand(unittest.TestCase):
         self.assertIn("collide", err.getvalue())
         self.assertEqual(established.read_text(encoding="utf-8"), "Q: hola\nA: hello\n")
 
+    def test_finds_deck_file_renamed_during_the_interactive_prompt(self):
+        # The narrower sibling of the collision case just above, same shape
+        # as add's own "appears during the prompt" test: this deck starts
+        # with exactly *one* file, which gets renamed -- not duplicated -- to
+        # a different (but visually identical) Unicode normalization form of
+        # the same name while `remove` is sitting at the `-q` prompt. That's
+        # never a "collision" by _check_deck_collision's own definition
+        # (still only one file, either way), so the fresh recheck the
+        # collision case relies on can't catch it -- `deck_path` itself, computed
+        # from the *old* name before the rename, has to be re-resolved too.
+        # Without that, `remove` read the now-stale path, found nothing
+        # there, and wrongly reported the deck as gone entirely, even though
+        # `stats`/`sync` would still show it as a real, populated deck under
+        # its new on-disk name.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        original = self.decks_dir / f"{nfc}.md"
+        original.write_text("Q: hola\nA: hello\n", encoding="utf-8")
+        renamed = self.decks_dir / f"{nfd}.md"
+
+        def fake_input(prompt):
+            original.rename(renamed)
+            return "hola"
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback("remove", nfc)
+        self.assertEqual(rc, 0, err.getvalue())
+
+        self.assertEqual([p.name for p in self.decks_dir.glob("*.md")], [f"{nfd}.md"])
+        self.assertEqual(parse_deck(renamed.read_text(encoding="utf-8")), [])
+
     def test_no_matching_question_fails_without_touching_file(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
         deck_path = self.decks_dir / "spanish.md"
@@ -1086,6 +1121,41 @@ class TestEditCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("collide", err.getvalue())
         self.assertEqual(established.read_text(encoding="utf-8"), "Q: hola\nA: hello\n")
+
+    def test_finds_deck_file_renamed_during_the_interactive_prompt(self):
+        # The narrower sibling of the collision case just above, same shape
+        # as add's own "appears during the prompt" test (and remove's
+        # identical sibling test): this deck starts with exactly *one* file,
+        # renamed -- not duplicated -- to a different Unicode normalization
+        # form of the same name while `edit` is sitting at the `-q` prompt.
+        # Never a "collision" by _check_deck_collision's own definition, so
+        # the fresh recheck alone can't catch it; `deck_path` itself has to
+        # be re-resolved too, both before the preview read and again inside
+        # the lock. Without that, edit's preview read used the now-stale
+        # path, found nothing there, and wrongly reported the deck as gone
+        # entirely, even though `stats`/`sync` would still show it as a real,
+        # populated deck under its new on-disk name.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        original = self.decks_dir / f"{nfc}.md"
+        original.write_text("Q: hola\nA: hello\n", encoding="utf-8")
+        renamed = self.decks_dir / f"{nfd}.md"
+
+        def fake_input(prompt):
+            original.rename(renamed)
+            return "hola"
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback("edit", nfc, "--new-answer", "hello!")
+        self.assertEqual(rc, 0, err.getvalue())
+
+        self.assertEqual([p.name for p in self.decks_dir.glob("*.md")], [f"{nfd}.md"])
+        cards = parse_deck(renamed.read_text(encoding="utf-8"))
+        self.assertEqual(cards[0].answer, "hello!")
 
     def test_no_matching_question_fails_without_touching_file(self):
         self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
