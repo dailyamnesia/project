@@ -825,6 +825,22 @@ def cmd_edit(args):
     # the same gap that used to exist here for surrounding whitespace.
     question = normalize_question((args.question if args.question is not None else input("Q: ")).strip())
 
+    # Re-check for a collision now, not just once before the (possibly
+    # interactive, possibly long) -q prompt above -- see cmd_add's identical
+    # re-check for why a second, colliding deck file appearing in that window
+    # can't be caught by the earlier check alone. Without this, the
+    # `_find_deck_path` re-resolve just below -- which silently picks one of
+    # two colliding files by sort order once a collision exists, per its own
+    # docstring -- could read the preview from the *wrong* file: showing the
+    # user a "current Q/A" that isn't their real card's content at all (or
+    # failing to find their question there and wrongly reporting "no card
+    # with that question found" for one that's genuinely there, just in the
+    # other, colliding file), before the later collision check inside the
+    # lock ever gets a chance to refuse the operation.
+    collision_error = _check_deck_collision(decks_dir, args.deck)
+    if collision_error:
+        print(f"error: {collision_error}", file=sys.stderr)
+        return 1
     # Re-resolve deck_path itself, not just reuse the guess from before this
     # (possibly interactive, possibly long) -q prompt: the file backing this
     # deck name can be renamed in that window -- e.g. to a different Unicode

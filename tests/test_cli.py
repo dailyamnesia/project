@@ -1122,6 +1122,76 @@ class TestEditCommand(unittest.TestCase):
         self.assertIn("collide", err.getvalue())
         self.assertEqual(established.read_text(encoding="utf-8"), "Q: hola\nA: hello\n")
 
+    def test_refuses_when_a_colliding_file_appears_during_the_dash_q_prompt(self):
+        # Narrower still than the collision case just above: that test only
+        # covers a colliding file appearing during the *second* interactive
+        # window (the new-Q/new-A prompts, after a card's already been found
+        # and its preview printed) -- and by then, a fresh
+        # _check_deck_collision right before the final write already catches
+        # it. This one covers the *first* window -- the "-q" prompt itself,
+        # when -q is omitted -- which sits before the preview read's own
+        # deck_path re-resolve. That re-resolve used to run with no fresh
+        # _check_deck_collision of its own (unlike every other deck_path
+        # re-resolve in add/remove/edit), so a second, colliding deck file
+        # appearing while the user is still sitting at "Q: " let
+        # `_find_deck_path` silently pick one of the two colliding files by
+        # sort order and print *its* content as the "current Q/A" preview --
+        # content that might not even belong to the deck the user thinks
+        # they're editing -- with no hint that a collision existed. Neither
+        # --new-question nor --new-answer is passed here, so a real session
+        # goes on to show that misleading preview and prompt for new text.
+        # If the user then answers both prompts blank (keeping the -- as far
+        # as they can tell -- unchanged card), `cmd_edit` prints "nothing
+        # changed" and returns 0 *before* ever reaching the final-write
+        # recheck inside the lock: the collision is never reported at all,
+        # not even the "refuses but explains why" outcome the second-window
+        # collision case above gets. Only a user who actually types a new
+        # answer reaches that later recheck and gets an (equally late)
+        # honest error.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        established = self.decks_dir / f"{nfc}.md"
+        established.write_text("Q: hola\nA: hello (real answer)\n", encoding="utf-8")
+
+        prompted = []
+
+        def fake_input(prompt):
+            prompted.append(prompt)
+            if prompt == "Q: ":
+                # Another process/person creates a colliding deck file while
+                # still sitting at this very first prompt.
+                (self.decks_dir / f"{nfd}.md").write_text(
+                    "Q: hola\nA: WRONG unrelated answer from the colliding file\n", encoding="utf-8"
+                )
+                return "hola"
+            # Only reached on unfixed code, which reads the wrong file's
+            # content, finds a "match" there too, and goes on to prompt for
+            # new text based on it.
+            return ""
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback("edit", nfc)
+        self.assertEqual(rc, 1)
+        self.assertIn("collide", err.getvalue())
+        # The fix catches the collision right after the "-q" prompt, before
+        # ever reading a preview or prompting for new text -- so the
+        # interactive session must stop there, having asked exactly one
+        # question.
+        self.assertEqual(prompted, ["Q: "])
+        # No misleading preview of either file's content was ever printed.
+        self.assertNotIn("current A:", out.getvalue())
+        self.assertNotIn("WRONG unrelated answer", out.getvalue())
+        # Neither colliding file was touched.
+        self.assertEqual(established.read_text(encoding="utf-8"), "Q: hola\nA: hello (real answer)\n")
+        self.assertEqual(
+            (self.decks_dir / f"{nfd}.md").read_text(encoding="utf-8"),
+            "Q: hola\nA: WRONG unrelated answer from the colliding file\n",
+        )
+
     def test_finds_deck_file_renamed_during_the_interactive_prompt(self):
         # The narrower sibling of the collision case just above, same shape
         # as add's own "appears during the prompt" test (and remove's
