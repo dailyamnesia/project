@@ -102,14 +102,31 @@ class ParseError(ValueError):
 def parse_deck(text: str, *, validate: bool = True) -> list[Card]:
     """Parse deck file text into cards.
 
-    `validate=False` skips `_check_card_text` on every card (duplicate-question
-    detection still runs either way — that's a structural correctness check, not
-    a dangerous-content one). Used internally by `append_card`/`remove_card`/
-    `edit_card`, which only need to *locate* card(s) among the others, not re-vet
-    every unrelated card's content on each call — otherwise one poisoned card
-    (see the docstring on `_check_card_text`) would block adding, removing, or
-    editing any other, unrelated card in the same deck. `sync` and any other real
-    read of a deck file's content should keep the default `validate=True`.
+    `validate=False` also skips the duplicate-question check below, not just
+    `_check_card_text`. Both used to be described as separable (duplicate
+    detection framed as a "structural correctness check" that should always
+    run), but that turned out to be exactly the same "one poisoned card blocks
+    every other, unrelated card" failure shape `_check_card_text` is skipped
+    here to prevent -- just for a deck-wide *pair* of cards instead of one
+    card's own content. A hand-edited (or merge-conflicted) deck file that
+    picks up two cards sharing a question is a real, reachable state -- and
+    with duplicate detection unconditional, it used to permanently lock
+    `add`/`remove`/`edit` out of touching *any* other, unrelated card in that
+    deck too, since all three locate their target by calling this function
+    first. The only way out was hand-editing the file directly, defeating
+    the entire point of `add`/`remove`/`edit` existing as an alternative to
+    that.
+
+    Used internally by `append_card`/`remove_card`/`edit_card`, which only
+    need to *locate* card(s) among the others, not re-vet every unrelated
+    card's content -- or the whole deck's uniqueness -- on each call. Each of
+    those three still separately guards against the specific new duplicate
+    *it* could introduce (see their own docstrings) -- this function skipping
+    the check doesn't weaken that, it just stops it from firing on some
+    *other*, untouched pair this call was never asked about. `sync` and any
+    other real read of a deck file's content should keep the default
+    `validate=True`, which still refuses to load a deck with a real
+    duplicate anywhere in it, exactly as before.
     """
     cards = []
     seen_questions = set()
@@ -118,7 +135,7 @@ def parse_deck(text: str, *, validate: bool = True) -> list[Card]:
         if not block:
             continue
         card = _parse_card(block)
-        if card.question in seen_questions:
+        if validate and card.question in seen_questions:
             raise ParseError(
                 f"duplicate question in this deck: {card.question!r} -- "
                 "each card's question must be unique within a deck file, since "
@@ -421,9 +438,8 @@ def append_card(existing_text: str, question: str, answer: str) -> str:
     content, so this can be used both to create a deck file from scratch
     and to add a card to an existing one. Raises ParseError if a card with
     the same question already exists in this deck — without this check,
-    `add` would silently create a duplicate that then blocks `sync` for
-    the whole deck (parse_deck's own duplicate check, further down this
-    file, runs unconditionally on every read).
+    `add` would silently create a duplicate that then blocks `sync` (which
+    calls parse_deck with the default `validate=True`) for the whole deck.
 
     Parses `existing_text` with `validate=False`: adding a new card
     shouldn't be blocked by some other, unrelated card in the same deck
@@ -486,6 +502,13 @@ def edit_card(
     the new question/answer text being written: editing one card shouldn't be
     blocked by some other, unrelated card in the same deck failing that check,
     but the new content this call actually introduces still has to pass it.
+    The new-question-collision check below has the same shape: it only
+    compares the new question against *other* cards' original questions, not
+    a full rescan of the updated deck for any duplicate anywhere in it --
+    otherwise a pre-existing duplicate pair elsewhere in the deck, unrelated
+    to the card actually being edited, would block this edit too, the same
+    "one poisoned pair blocks everything else" failure `validate=False` above
+    already exists to prevent.
     """
     if new_question is None and new_answer is None:
         raise ParseError("must provide a new question and/or a new answer to edit")
@@ -505,19 +528,14 @@ def edit_card(
             if not a:
                 raise ParseError("answer cannot be empty")
             _check_card_text(q, a)
+            if any(other.question == q for other in cards if other.question != question):
+                raise ParseError(
+                    f"a card with this question already exists in this deck: {q!r}"
+                )
             updated.append(Card(question=q, answer=a))
         else:
             updated.append(card)
     if not found:
         raise ParseError(f"no card with that question found: {question!r}")
-
-    seen = set()
-    for card in updated:
-        if card.question in seen:
-            raise ParseError(
-                f"duplicate question in this deck: {card.question!r} -- "
-                "each card's question must be unique within a deck file"
-            )
-        seen.add(card.question)
 
     return _render_deck(updated)

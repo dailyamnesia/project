@@ -102,6 +102,16 @@ class TestParser(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_deck(text)
 
+    def test_duplicate_question_does_not_raise_under_validate_false(self):
+        # validate=False is the escape hatch append_card/remove_card/edit_card
+        # use to locate a card among others without being blocked by some
+        # other, unrelated problem elsewhere in the deck -- a duplicate
+        # question pair is exactly that kind of unrelated problem, not
+        # something the *lookup* itself needs to police.
+        text = "Q: hola\nA: hi\n---\nQ: hola\nA: hello (again)\n"
+        cards = parse_deck(text, validate=False)
+        self.assertEqual([c.question for c in cards], ["hola", "hola"])
+
     def test_same_question_in_different_decks_is_fine(self):
         # parse_deck only sees one file at a time, so this isn't a duplicate
         # from its point of view — cross-deck duplicates are a separate,
@@ -218,6 +228,15 @@ class TestAppendCard(unittest.TestCase):
         existing = "Q: question\nA: answer with a bell\x07 in it\n"
         text = append_card(existing, "a new question", "a new answer")
         self.assertEqual(len(parse_deck(text, validate=False)), 2)
+
+    def test_duplicate_question_check_is_not_blocked_by_an_unrelated_duplicate_pair(self):
+        # Two other cards already sharing a question (e.g. from hand-editing
+        # the deck file, or a merge conflict) used to block adding any new,
+        # distinct card too, since parse_deck's own duplicate check ran
+        # unconditionally even under validate=False.
+        existing = "Q: b\nA: 2\n---\nQ: b\nA: 3\n"
+        text = append_card(existing, "c", "a new answer")
+        self.assertEqual(len(parse_deck(text, validate=False)), 3)
 
     def test_answer_with_embedded_separator_line_raises(self):
         # a line of 3+ dashes inside the answer would read back as a card
@@ -414,6 +433,15 @@ class TestRemoveCard(unittest.TestCase):
         result = remove_card(text, nfd)
         self.assertEqual(parse_deck(result), [])
 
+    def test_removes_unrelated_card_despite_an_unrelated_duplicate_pair_in_the_deck(self):
+        # Same shape as the poisoned-control-character test above, but for
+        # two *other* cards already sharing a question — parse_deck's own
+        # duplicate check used to run unconditionally even under
+        # validate=False, so this used to block removing "a" too.
+        text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n---\nQ: b\nA: 3\n"
+        result = remove_card(text, "a")
+        self.assertEqual([c.question for c in parse_deck(result, validate=False)], ["b", "b"])
+
 
 class TestEditCard(unittest.TestCase):
     def test_edits_answer_only_and_keeps_position(self):
@@ -453,6 +481,25 @@ class TestEditCard(unittest.TestCase):
         text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n"
         with self.assertRaises(ParseError):
             edit_card(text, "a", new_question="b")
+
+    def test_edits_unrelated_card_despite_an_unrelated_duplicate_pair_in_the_deck(self):
+        # Two other cards ("b"/"b") already sharing a question used to block
+        # editing any other, unrelated card too -- both because parse_deck's
+        # own duplicate check ran unconditionally even under validate=False,
+        # and because edit_card's own final collision check rescanned the
+        # whole updated deck for any duplicate, not just the new question
+        # against other, genuinely unrelated cards.
+        text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n---\nQ: b\nA: 3\n"
+        result = edit_card(text, "a", new_answer="99")
+        self.assertEqual(parse_deck(result, validate=False)[0], Card(question="a", answer="99"))
+
+    def test_new_question_matching_the_card_s_own_old_question_does_not_raise(self):
+        # Editing only the answer leaves the question unchanged, which
+        # trivially "collides" with the card's own prior self -- the
+        # collision check must compare against *other* cards only.
+        text = "Q: a\nA: 1\n"
+        result = edit_card(text, "a", new_answer="2")
+        self.assertEqual(parse_deck(result), [Card(question="a", answer="2")])
 
     def test_new_answer_with_embedded_separator_line_raises(self):
         text = "Q: 2+2?\nA: 4\n"
