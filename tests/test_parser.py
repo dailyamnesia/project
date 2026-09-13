@@ -442,6 +442,26 @@ class TestRemoveCard(unittest.TestCase):
         result = remove_card(text, "a")
         self.assertEqual([c.question for c in parse_deck(result, validate=False)], ["b", "b"])
 
+    def test_refuses_to_guess_which_duplicate_to_remove(self):
+        # A hand-edited deck can have two cards sharing the very question
+        # being targeted for removal (validate=False above deliberately lets
+        # remove_card operate on a deck with a duplicate elsewhere -- but
+        # here the duplicate *is* the target). Filtering with `!=` used to
+        # drop every card matching "b" in one call, silently discarding
+        # answer "3" along with answer "2" even though only one was asked
+        # for -- real, silent data loss with no hint two cards vanished
+        # instead of one. This must refuse instead of guessing which
+        # occurrence to keep.
+        text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n---\nQ: b\nA: 3\n"
+        with self.assertRaises(ParseError):
+            remove_card(text, "b")
+        # Refusing must not touch the file: both duplicates, and the
+        # unrelated card, are all still there afterward.
+        self.assertEqual(
+            [(c.question, c.answer) for c in parse_deck(text, validate=False)],
+            [("a", "1"), ("b", "2"), ("b", "3")],
+        )
+
 
 class TestEditCard(unittest.TestCase):
     def test_edits_answer_only_and_keeps_position(self):
@@ -543,6 +563,36 @@ class TestEditCard(unittest.TestCase):
         text = "Q: a\nA: 1\n---\nQ: bad\nA: bell\x07here\n"
         with self.assertRaises(ParseError):
             edit_card(text, "a", new_answer="four\x1b[8m (hidden)\x1b[0m")
+
+    def test_refuses_to_guess_which_duplicate_to_edit_by_answer(self):
+        # Same ambiguity as remove_card's equivalent test, reached through
+        # edit instead: with only new_answer given, this used to silently
+        # apply the same new answer to *every* card matching "b", discarding
+        # whichever duplicate's original answer didn't already read "99".
+        text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n---\nQ: b\nA: 3\n"
+        with self.assertRaises(ParseError):
+            edit_card(text, "b", new_answer="99")
+        self.assertEqual(
+            [(c.question, c.answer) for c in parse_deck(text, validate=False)],
+            [("a", "1"), ("b", "2"), ("b", "3")],
+        )
+
+    def test_refuses_to_guess_which_duplicate_to_edit_by_question(self):
+        # With new_question given instead, this used to rename *every* card
+        # matching "b" to the same new question -- still leaving the deck
+        # just as poisoned by a duplicate as before (now under the new name)
+        # instead of actually fixing it, and silently: the new-question
+        # collision check can't catch this, since it only compares the new
+        # question against cards whose *original* question differs from the
+        # one being searched for, which every duplicate here fails by
+        # construction.
+        text = "Q: a\nA: 1\n---\nQ: b\nA: 2\n---\nQ: b\nA: 3\n"
+        with self.assertRaises(ParseError):
+            edit_card(text, "b", new_question="bnew")
+        self.assertEqual(
+            [(c.question, c.answer) for c in parse_deck(text, validate=False)],
+            [("a", "1"), ("b", "2"), ("b", "3")],
+        )
 
 
 if __name__ == "__main__":

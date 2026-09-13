@@ -470,15 +470,38 @@ def remove_card(existing_text: str, question: str) -> str:
     person hand-editing the file) got the question text wrong, and silently
     doing nothing would be worse than saying so.
 
+    Also raises ParseError, removing nothing, if *more than one* card matches
+    `question` -- reachable despite `add`/`edit` both refusing to create a
+    same-deck duplicate, because a deck file is documented as normal to
+    hand-edit directly (see `parse_deck`'s own duplicate check, and this
+    function's `validate=False` parse below, which deliberately tolerates a
+    pre-existing duplicate elsewhere in the deck so it doesn't block removing
+    some other, unrelated card). Filtering by `!=` here used to remove every
+    card matching `question` at once, silently: precisely the "fix a
+    hand-edited duplicate" case this function exists to help with, and
+    exactly the case where deleting more than the one occurrence a caller
+    asked for is real, silent data loss (the *other* duplicate's answer is
+    gone too, with a plain "removed" success message giving no hint two cards
+    vanished instead of one). Refusing here instead -- the same "don't guess
+    which one you mean" response `_check_deck_collision` already gives a
+    same-named-file collision in `cli.py` -- leaves both duplicates in place
+    until the file is fixed by hand, rather than guessing which one to keep.
+
     Parses with `validate=False`: removing one card shouldn't be blocked by
     some other, unrelated card in the same deck failing `_check_card_text`.
     """
     question = normalize_question(question.strip())
     cards = parse_deck(existing_text, validate=False)
-    remaining = [card for card in cards if card.question != question]
-    if len(remaining) == len(cards):
+    matches = [card for card in cards if card.question == question]
+    if not matches:
         raise ParseError(f"no card with that question found: {question!r}")
+    if len(matches) > 1:
+        raise ParseError(
+            f"{len(matches)} cards share this same question ({question!r}) -- refusing to "
+            "guess which one you mean to remove; fix the duplicate by hand, then remove/sync again"
+        )
 
+    remaining = [card for card in cards if card is not matches[0]]
     return _render_deck(remaining)
 
 
@@ -509,6 +532,21 @@ def edit_card(
     to the card actually being edited, would block this edit too, the same
     "one poisoned pair blocks everything else" failure `validate=False` above
     already exists to prevent.
+
+    Also raises ParseError, changing nothing, if *more than one* card matches
+    `question` -- the same ambiguity `remove_card` refuses to guess through,
+    reached the same way (a hand-edited duplicate `validate=False` above
+    deliberately tolerates so it doesn't block editing some other, unrelated
+    card). Without this, editing one occurrence of a duplicate-question pair
+    used to update *every* card matching `question` at once: with only
+    `new_answer` given, each duplicate silently got the same new answer,
+    quietly discarding whichever one didn't already hold that text; with
+    `new_question` given, every duplicate was renamed to the identical new
+    question, still leaving the deck just as poisoned as before under the new
+    name instead of fixing it -- and the new-question-collision check above
+    can't catch that case, since it only compares the new question against
+    cards whose *original* question differs from the one being searched for,
+    which every duplicate here fails by construction.
     """
     if new_question is None and new_answer is None:
         raise ParseError("must provide a new question and/or a new answer to edit")
@@ -516,11 +554,19 @@ def edit_card(
     question = normalize_question(question.strip())
     cards = parse_deck(existing_text, validate=False)
 
+    matches = [card for card in cards if card.question == question]
+    if not matches:
+        raise ParseError(f"no card with that question found: {question!r}")
+    if len(matches) > 1:
+        raise ParseError(
+            f"{len(matches)} cards share this same question ({question!r}) -- refusing to "
+            "guess which one you mean to edit; fix the duplicate by hand, then edit/sync again"
+        )
+    target = matches[0]
+
     updated = []
-    found = False
     for card in cards:
-        if card.question == question:
-            found = True
+        if card is target:
             q = normalize_question(new_question.strip()) if new_question is not None else card.question
             a = new_answer.strip() if new_answer is not None else card.answer
             if not q:
@@ -535,7 +581,5 @@ def edit_card(
             updated.append(Card(question=q, answer=a))
         else:
             updated.append(card)
-    if not found:
-        raise ParseError(f"no card with that question found: {question!r}")
 
     return _render_deck(updated)
