@@ -352,6 +352,24 @@ class TestAppendCard(unittest.TestCase):
         with self.assertRaises(ParseError):
             append_card("", "question", f"answer{chr(0xE007F)}")
 
+    def test_question_with_byte_order_mark_raises(self):
+        # U+FEFF (the UTF-8/UTF-16 byte-order mark) is category Cf, same as
+        # the Tags-block character above, so neither the Cc nor the bidi
+        # check catches it -- and it's invisible everywhere outside position
+        # zero of a file, the one place _read_deck_text already strips it.
+        # Embedded in the middle of a question (e.g. two files concatenated
+        # by a script, or a paste that starts partway through a second
+        # BOM-prefixed file), it reads on screen exactly like the same
+        # question without it, yet compares unequal as text -- so remove/edit
+        # exact-match lookups would fail to find a card that's genuinely
+        # right there.
+        with self.assertRaises(ParseError):
+            append_card("", f"question{chr(0xFEFF)}", "answer")
+
+    def test_answer_with_byte_order_mark_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "question", f"answer{chr(0xFEFF)}")
+
     def test_hand_edited_line_separator_would_silently_change_the_question_on_reparse(self):
         # Demonstrates the actual failure this check exists to prevent:
         # bypass validation (the same way parse_deck's own `validate=False`

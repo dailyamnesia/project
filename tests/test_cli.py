@@ -545,6 +545,19 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_byte_order_mark_is_rejected(self):
+        # U+FEFF (the UTF-8/UTF-16 byte-order mark) is invisible everywhere
+        # outside position zero of a file -- the one place _read_deck_text
+        # already strips it -- so a deck name with one spliced into the
+        # middle (e.g. built by a script that concatenates a BOM-prefixed
+        # value) prints identically to the same name without it in every
+        # listing this tool produces, while comparing unequal to it: the
+        # same "looks the same, isn't" risk already blocked for a Unicode
+        # tag character just above.
+        rc = self.run_flashback("add", "evil﻿deck", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_unpaired_surrogate_is_rejected_without_writing_file(self):
         # Same failure shape as the deck-name case above, just for card text:
         # caught here as a clean ParseError instead of crashing later in
@@ -2288,8 +2301,10 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
     literal in cli.py/parser.py that isn't a docstring (comments and
     docstrings are never printed, so non-ASCII prose there is harmless) and
     fails if any contains a character outside ASCII. parser.LINE_SEPARATOR_CHARS
-    is the one deliberate exception: its two characters (U+2028/U+2029) are
-    data being matched against, not text ever printed to a terminal.
+    and parser.ZERO_WIDTH_NO_BREAK_SPACE are the deliberate exceptions: all
+    three characters (U+2028/U+2029/U+FEFF) are data being matched against,
+    not text ever printed to a terminal -- every message that reports one
+    names it by its ASCII "U+FEFF"/"U+2028" form instead.
     """
 
     FLASHBACK_DIR = Path(__file__).resolve().parent.parent / "flashback"
@@ -2312,7 +2327,7 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
         return ids
 
     def test_no_non_ascii_characters_in_printed_message_literals(self):
-        line_separator_chars = {"\u2028", "\u2029"}
+        comparison_data_chars = {"\u2028", "\u2029", "\ufeff"}
         offenders = []
         for filename in ("cli.py", "parser.py"):
             path = self.FLASHBACK_DIR / filename
@@ -2324,9 +2339,10 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
                     continue
                 if id(node) in doc_ids:
                     continue
-                if node.value in line_separator_chars:
-                    # parser.LINE_SEPARATOR_CHARS: data compared against
-                    # deck/card text, never printed on its own.
+                if node.value in comparison_data_chars:
+                    # parser.LINE_SEPARATOR_CHARS / ZERO_WIDTH_NO_BREAK_SPACE:
+                    # data compared against deck/card text, never printed on
+                    # its own.
                     continue
                 if any(ord(c) > 127 for c in node.value):
                     offenders.append((filename, node.lineno, node.value))
@@ -3065,6 +3081,46 @@ class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertIn("Unicode tag character", buf.getvalue())
+
+    def test_decks_dir_with_byte_order_mark_is_rejected_before_writing_the_card(self):
+        # U+FEFF (the byte-order mark) is invisible everywhere outside
+        # position zero of a file, so it doesn't corrupt display the way a
+        # control character or bidi override does -- but _invalid_deck_name
+        # already rejects it in a deck name for exactly this reason: two
+        # names (or here, two --decks-dir values) that print identically can
+        # secretly be different strings underneath. _invalid_dir_arg was
+        # never given the same check.
+        bad_decks_dir = os.path.join(self._tmp.name, "de﻿cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+
+        rc = main(
+            ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_state_dir_with_byte_order_mark_is_rejected_before_creating_it(self):
+        decks_dir = Path(self._tmp.name) / "decks"
+        decks_dir.mkdir()
+        (decks_dir / "spanish.md").write_text("Q: hola?\nA: hello\n", encoding="utf-8")
+        bad_state_dir = os.path.join(self._tmp.name, ".flashback﻿")
+
+        rc = main(["--decks-dir", str(decks_dir), "--state-dir", bad_state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_state_dir))
+
+    def test_decks_dir_error_message_names_the_byte_order_mark(self):
+        bad_decks_dir = os.path.join(self._tmp.name, "de﻿cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            rc = main(["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("byte-order-mark", buf.getvalue())
 
 
 @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo is POSIX-only, like the rest of this project's locking")

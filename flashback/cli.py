@@ -16,6 +16,7 @@ from . import __version__
 from .parser import (
     BIDI_FORMATTING_CLASSES,
     LINE_SEPARATOR_CHARS,
+    ZERO_WIDTH_NO_BREAK_SPACE,
     ParseError,
     _check_card_text,
     _is_unicode_tag_char,
@@ -160,6 +161,15 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     identical to. Same narrow-range check as `_check_card_text` uses, for
     the same reason a blanket Cf rejection would wrongly catch legitimate
     ZWJ/variation-selector characters in an emoji-bearing deck name.
+
+    U+FEFF (`ZERO_WIDTH_NO_BREAK_SPACE` in `parser.py`), the byte-order mark,
+    gets the same rejection for the same reason: it's invisible everywhere
+    outside position zero of a file (the one place `_read_deck_text` already
+    strips it), so a deck name with one spliced in (e.g. built by a script
+    that concatenates a BOM-prefixed value) reads identically to the same
+    name without it in every listing this module prints, while comparing
+    unequal to it -- the identical "looks the same, isn't" gap the Tags-block
+    check above exists to close.
     """
     if "/" in name or "\\" in name:
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
@@ -195,6 +205,12 @@ def _invalid_deck_name(name: str) -> Optional[str]:
                 f"invalid deck name: {name!r} (contains a Unicode tag character "
                 f"U+{ord(ch):04X}, which has no visible glyph in any font and can "
                 "make two visually-identical deck names actually differ)"
+            )
+        if ch == ZERO_WIDTH_NO_BREAK_SPACE:
+            return (
+                f"invalid deck name: {name!r} (contains a byte-order-mark character "
+                "U+FEFF, which is invisible and can make two visually-identical deck "
+                "names actually differ)"
             )
     return None
 
@@ -1362,6 +1378,13 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
     failure `_invalid_deck_name` already exists to prevent for a deck name,
     just reached through a sibling argument that was never given the same
     check when this function was first added.
+
+    Also missing until now: `_invalid_deck_name`'s U+FEFF (byte-order-mark,
+    `ZERO_WIDTH_NO_BREAK_SPACE` in `parser.py`) check, for the identical
+    reason -- invisible everywhere outside position zero of a file, so a
+    `--decks-dir`/`--state-dir` value with one spliced into the middle reads
+    identically to the same path without it, in every message this module
+    prints, while pointing at a different real directory underneath.
     """
     for ch in value:
         if unicodedata.category(ch) == "Cs":
@@ -1392,6 +1415,12 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
                 f"invalid {flag}: {value!r} (contains a Unicode tag character "
                 f"U+{ord(ch):04X}, which has no visible glyph in any font and can "
                 "make two visually-identical paths actually differ)"
+            )
+        if ch == ZERO_WIDTH_NO_BREAK_SPACE:
+            return (
+                f"invalid {flag}: {value!r} (contains a byte-order-mark character "
+                "U+FEFF, which is invisible and can make two visually-identical "
+                "paths actually differ)"
             )
     return None
 

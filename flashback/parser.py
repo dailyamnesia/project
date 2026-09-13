@@ -60,6 +60,28 @@ def _is_unicode_tag_char(ch: str) -> bool:
     return UNICODE_TAG_RANGE[0] <= ord(ch) <= UNICODE_TAG_RANGE[1]
 
 
+# U+FEFF, ZERO WIDTH NO-BREAK SPACE -- better known by its other job, the
+# UTF-8/UTF-16 byte-order mark. `_read_deck_text` already strips one of these
+# when it's the very first character of a file (via "utf-8-sig"), the one
+# place it has a real, legitimate purpose. Anywhere else in a question,
+# answer, or deck name it has none: it renders as nothing in every modern
+# renderer (older ones that don't recognize it show a stray glyph, but never
+# the same thing twice, and never anything a person would type on purpose),
+# so unlike a bidi override or a Tags-block character (both category Cf, same
+# as this), there's no legitimate-content trade-off in rejecting it the way
+# there is for those two (bidi: real RTL text; Tags: nothing rejected here at
+# all, the block was already vestigial) -- U+FEFF has no ordinary use as
+# *content* anywhere outside position zero of a file. Left unchecked, it's
+# invisible in exactly the same way a Tags-block character is: two questions
+# that print identically on screen -- one with a stray BOM concatenated into
+# it (pasted from another UTF-8 file, or two files joined by a script) and
+# one without -- compare unequal as plain text, so `remove`/`edit`'s
+# exact-match lookup reports "no card with that question found" for a
+# question that's sitting right there, unchanged from the "looks the same
+# but isn't" failure shape every other check in this module closes.
+ZERO_WIDTH_NO_BREAK_SPACE = "﻿"
+
+
 def normalize_question(question: str) -> str:
     """Normalize a question to NFC so it compares equal regardless of how its
     accented/composed characters happen to be encoded.
@@ -352,6 +374,20 @@ def _check_card_text(question: str, answer: str) -> None:
     isn't" gap `normalize_question` closes for differently-normalized
     accents, just via invisible extra characters instead of a different
     encoding of the same visible ones.
+
+    A sixth case: U+FEFF (see ZERO_WIDTH_NO_BREAK_SPACE), better known as the
+    UTF-8/UTF-16 byte-order mark. `_read_deck_text` already strips one when
+    it's literally the first character of a file -- its one legitimate job --
+    but that guard says nothing about one appearing *inside* a question or
+    answer (e.g. two files concatenated by a script, or text pasted from
+    partway through a second BOM-prefixed file). Same category (Cf) as the
+    bidi controls and the Tags block above, so neither of those checks catch
+    it either, and the identical "looks the same, isn't" consequence as the
+    Tags-block case: it's invisible in every renderer, so a question typed
+    (or pasted) with a stray BOM in the middle reads on screen exactly like
+    the same question without one, yet compares unequal as text -- the exact
+    gap that makes `remove`/`edit`'s exact-match lookup report "no card with
+    that question found" for a card that's genuinely right there.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -402,6 +438,12 @@ def _check_card_text(question: str, answer: str) -> None:
                     "has no visible glyph in any font and can hide an entire invisible message "
                     "inside text that looks perfectly ordinary on screen -- not allowed in card "
                     "text"
+                )
+            if ch == ZERO_WIDTH_NO_BREAK_SPACE:
+                raise ParseError(
+                    f"{field_name} contains a byte-order-mark character (U+FEFF), which is "
+                    "invisible and would make this look identical to the same text without "
+                    "it -- not allowed in card text"
                 )
 
 
