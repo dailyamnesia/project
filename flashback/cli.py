@@ -479,6 +479,28 @@ def _deck_lock(lock_path: Path, state_dir: Path):
         os.close(fd)
 
 
+def _is_symlink_loop(path: Path) -> bool:
+    """True if `path` is a symlink that can never be resolved to a real file
+    because it loops back on itself -- directly (`ln -s spanish.md
+    spanish.md`) or through a longer chain.
+
+    `_atomic_write_text` already detects exactly this on the *write* side
+    (see its own docstring) by catching the bare `RuntimeError` that
+    `Path.resolve()` raises for a cycle. This is the same detection, reused
+    on the *read* side by `_read_deck_text` and by `cmd_remove`/`cmd_edit`'s
+    own up-front `deck_path.exists()` checks -- both of which, without this,
+    treat a looping symlink exactly like a deck file that was never there or
+    was deleted (see `_read_deck_text`'s docstring for why that's wrong).
+    """
+    if not path.is_symlink():
+        return False
+    try:
+        path.resolve()
+    except RuntimeError:
+        return True
+    return False
+
+
 def _read_deck_text(deck_path: Path) -> str:
     """Read a deck file as UTF-8, raising ParseError (not UnicodeDecodeError) on bad bytes.
 
@@ -542,7 +564,26 @@ def _read_deck_text(deck_path: Path) -> str:
     reachable sequence, not a hypothetical: the earlier existence check has
     already passed by the time it happens, and nothing about a FIFO, device,
     socket, or directory was ever involved.
+
+    Checks `_is_symlink_loop` before that same non-existence check, for the
+    identical reason: a symlink that loops back on itself (see that
+    function's own docstring) makes `Path.exists()` return False exactly
+    like a deleted deck file does -- `Path.exists()` follows symlinks and,
+    since a loop can never resolve to a real file, reports "not there" for
+    one the same way it does for a path with nothing at all. Without this
+    check first, a hand-created (or two-half-finished-scripts-created) loop
+    at a deck file's path was blamed on having "been deleted (by hand, or by
+    another flashback invocation)" -- false on both counts, since the file
+    was never touched, let alone deleted, and this reads back the exact same
+    way on every subsequent `sync`/`remove`/`edit`, not just once right after
+    it's created. `_atomic_write_text` already gives an accurate, distinct
+    message for this same cycle on the write side (see its own docstring);
+    this is that same diagnosis, reached from the read side instead --
+    `sync`'s own read of such a file, or `remove`/`edit`'s, not `add`'s write
+    to a brand-new one.
     """
+    if _is_symlink_loop(deck_path):
+        raise ParseError(f"{deck_path} is a symlink loop -- can't resolve it to a real file")
     if not deck_path.exists():
         raise ParseError(
             f"{deck_path} no longer exists -- it may have been deleted (by hand, or "
@@ -789,7 +830,14 @@ def cmd_remove(args):
         print(f"error: {collision_error}", file=sys.stderr)
         return 1
     deck_path = _find_deck_path(decks_dir, args.deck)
-    if not deck_path.exists():
+    # `or _is_symlink_loop(deck_path)`: a symlink that loops back on itself
+    # makes plain `.exists()` report False exactly like a deck that was
+    # never created does (see `_read_deck_text`'s docstring) -- without this,
+    # a deck file that's genuinely sitting right there, just as an unusable
+    # loop, was misreported as "no such deck" instead of the accurate
+    # "symlink loop" error `_read_deck_text` below now gives once this lets
+    # it through to that check instead of bailing out here first.
+    if not deck_path.exists() and not _is_symlink_loop(deck_path):
         print(f"no such deck: {deck_path}", file=sys.stderr)
         return 1
 
@@ -844,7 +892,9 @@ def cmd_edit(args):
         print(f"error: {collision_error}", file=sys.stderr)
         return 1
     deck_path = _find_deck_path(decks_dir, args.deck)
-    if not deck_path.exists():
+    # See cmd_remove's identical check for why a symlink loop has to be let
+    # through here rather than reported as "no such deck".
+    if not deck_path.exists() and not _is_symlink_loop(deck_path):
         print(f"no such deck: {deck_path}", file=sys.stderr)
         return 1
 

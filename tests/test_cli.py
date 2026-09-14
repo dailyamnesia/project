@@ -795,6 +795,37 @@ class TestRemoveCommand(unittest.TestCase):
         rc = self.run_flashback("remove", "no-such-deck", "-q", "hello?")
         self.assertEqual(rc, 1)
 
+    @unittest.skipIf(os.name == "nt", "symlinked deck files aren't exercised on Windows")
+    def test_self_referential_symlink_deck_file_fails_with_accurate_message(self):
+        # `add` (see test_add_to_self_referential_symlink_deck_file_fails_cleanly
+        # in TestAddCommand) already reports a self-referential symlink loop
+        # (`ln -s spanish.md spanish.md`, or a longer chain) as exactly that
+        # -- a real deck file that genuinely exists but can never be resolved
+        # to actual content, not a deck that was never created.
+        #
+        # `remove`'s own up-front check here used a plain `deck_path.exists()`
+        # to decide whether to bother reading the file at all -- but
+        # `Path.exists()` follows symlinks, and a loop can never resolve, so
+        # it reports False for one exactly the same way it does for a deck
+        # that's never existed. Without a check for the loop specifically,
+        # `remove` (and `edit`, and `sync` reading the same file) said "no
+        # such deck"/"no longer exists -- it may have been deleted", which is
+        # false on both counts: the file was never deleted, and never even
+        # touched -- it's sitting right there the whole time, just as an
+        # unusable loop.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        link_path = self.decks_dir / "spanish.md"
+        os.symlink(link_path, link_path)
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback("remove", "spanish", "-q", "hello?")
+        self.assertEqual(rc, 1)
+        message = err.getvalue()
+        self.assertIn("symlink loop", message.lower())
+        self.assertNotIn("no such deck", message)
+        self.assertNotIn("no longer exists", message)
+
     def test_deck_file_deleted_while_prompting_for_question_fails_with_accurate_message(self):
         # `remove`'s existence check runs before the (possibly interactive)
         # `-q` prompt, then the file is read again for real inside
@@ -1082,6 +1113,27 @@ class TestEditCommand(unittest.TestCase):
     def test_missing_deck_file_fails(self):
         rc = self.run_flashback("edit", "no-such-deck", "-q", "hello?", "--new-answer", "x")
         self.assertEqual(rc, 1)
+
+    @unittest.skipIf(os.name == "nt", "symlinked deck files aren't exercised on Windows")
+    def test_self_referential_symlink_deck_file_fails_with_accurate_message(self):
+        # See TestRemoveCommand's identical test: `edit`'s own up-front
+        # `deck_path.exists()` check has the same blind spot as `remove`'s --
+        # a self-referential symlink loop reports False from `.exists()`
+        # exactly like a deck that never existed, so this used to be
+        # misreported as "no such deck" instead of the accurate "symlink
+        # loop" diagnosis `_read_deck_text` already gives `sync`/`add`.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        link_path = self.decks_dir / "spanish.md"
+        os.symlink(link_path, link_path)
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback("edit", "spanish", "-q", "hello?", "--new-answer", "x")
+        self.assertEqual(rc, 1)
+        message = err.getvalue()
+        self.assertIn("symlink loop", message.lower())
+        self.assertNotIn("no such deck", message)
+        self.assertNotIn("no longer exists", message)
 
     def test_deck_file_deleted_during_interactive_prompt_fails_with_accurate_message(self):
         # cmd_edit's own docstring notes that existing_text is deliberately
@@ -1854,6 +1906,35 @@ class TestSyncCommand(unittest.TestCase):
         rc = self.run_flashback("sync")
         self.assertEqual(rc, 0)
 
+        with open_db(self.state_dir / "state.sqlite3") as conn:
+            rows = due_cards(conn, date.today())
+        self.assertEqual({r["question"] for r in rows}, {"bonjour?"})
+
+    @unittest.skipIf(os.name == "nt", "symlinked deck files aren't exercised on Windows")
+    def test_self_referential_symlink_deck_file_is_skipped_with_an_accurate_message(self):
+        # A deck file that's a self-referential symlink (ln -s spanish.md
+        # spanish.md, or a longer chain) makes Path.exists() report False --
+        # it follows symlinks, and a loop can never resolve to a real file --
+        # exactly the same way a deck file does that's genuinely been
+        # deleted. _read_deck_text used to fold the two together, so sync
+        # blamed this on the file having "been deleted (by hand, or by
+        # another flashback invocation)", which is false: the file was never
+        # touched, let alone deleted, and reads back identically on every
+        # subsequent sync, not just the first one after it's created.
+        self.run_flashback("add", "french", "-q", "bonjour?", "-a", "hello")
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        link_path = self.decks_dir / "spanish.md"
+        os.symlink(link_path, link_path)
+
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            rc = self.run_flashback("sync")
+        self.assertEqual(rc, 0)
+        message = err.getvalue()
+        self.assertIn("symlink loop", message.lower())
+        self.assertNotIn("no longer exists", message)
+
+        # The unrelated, real deck is unaffected.
         with open_db(self.state_dir / "state.sqlite3") as conn:
             rows = due_cards(conn, date.today())
         self.assertEqual({r["question"] for r in rows}, {"bonjour?"})
