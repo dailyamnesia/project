@@ -17,6 +17,7 @@ from .parser import (
     BIDI_FORMATTING_CLASSES,
     LINE_SEPARATOR_CHARS,
     ZERO_WIDTH_NO_BREAK_SPACE,
+    ZERO_WIDTH_SPACE,
     ParseError,
     _check_card_text,
     _is_unicode_tag_char,
@@ -170,6 +171,15 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     name without it in every listing this module prints, while comparing
     unequal to it -- the identical "looks the same, isn't" gap the Tags-block
     check above exists to close.
+
+    U+200B (`ZERO_WIDTH_SPACE` in `parser.py`), the zero-width space, gets
+    the same rejection for the same reason: unlike ZWJ/ZWNJ (deliberately
+    still allowed, see the Tags-block paragraph above) it isn't part of any
+    legitimate emoji or script-shaping sequence, and unlike a bidi override
+    it doesn't just reorder text someone can still read -- it's invisible in
+    every renderer, so a deck name with one spliced in (a common copy-paste
+    artifact from web pages that use it as an invisible wrap hint) reads
+    identically to the same name without it, while comparing unequal to it.
     """
     if "/" in name or "\\" in name:
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
@@ -211,6 +221,12 @@ def _invalid_deck_name(name: str) -> Optional[str]:
                 f"invalid deck name: {name!r} (contains a byte-order-mark character "
                 "U+FEFF, which is invisible and can make two visually-identical deck "
                 "names actually differ)"
+            )
+        if ch == ZERO_WIDTH_SPACE:
+            return (
+                f"invalid deck name: {name!r} (contains a zero-width space U+200B, "
+                "which is invisible and can make two visually-identical deck names "
+                "actually differ)"
             )
     return None
 
@@ -1435,6 +1451,12 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
     `--decks-dir`/`--state-dir` value with one spliced into the middle reads
     identically to the same path without it, in every message this module
     prints, while pointing at a different real directory underneath.
+
+    Also missing until now: `_invalid_deck_name`'s U+200B (zero-width space,
+    `ZERO_WIDTH_SPACE` in `parser.py`) check, for the identical reason --
+    invisible in every renderer, with no legitimate joining/shaping role the
+    way ZWJ/ZWNJ have, so a `--decks-dir`/`--state-dir` value with one
+    spliced in reads identically to the same path without it.
     """
     for ch in value:
         if unicodedata.category(ch) == "Cs":
@@ -1471,6 +1493,12 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
                 f"invalid {flag}: {value!r} (contains a byte-order-mark character "
                 "U+FEFF, which is invisible and can make two visually-identical "
                 "paths actually differ)"
+            )
+        if ch == ZERO_WIDTH_SPACE:
+            return (
+                f"invalid {flag}: {value!r} (contains a zero-width space U+200B, "
+                "which is invisible and can make two visually-identical paths "
+                "actually differ)"
             )
     return None
 

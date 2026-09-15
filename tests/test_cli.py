@@ -558,6 +558,16 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_zero_width_space_is_rejected(self):
+        # U+200B (ZERO WIDTH SPACE) is invisible in every renderer, the same
+        # "looks the same, isn't" risk already blocked above for the Tags
+        # block and the byte-order mark -- but unlike ZWJ/ZWNJ, it isn't
+        # part of any legitimate emoji or script-shaping sequence, so
+        # rejecting it costs nothing.
+        rc = self.run_flashback("add", f"evil{chr(0x200B)}deck", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_unpaired_surrogate_is_rejected_without_writing_file(self):
         # Same failure shape as the deck-name case above, just for card text:
         # caught here as a clean ParseError instead of crashing later in
@@ -2381,11 +2391,12 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
     (same project, same technique, different property): walks every string
     literal in cli.py/parser.py that isn't a docstring (comments and
     docstrings are never printed, so non-ASCII prose there is harmless) and
-    fails if any contains a character outside ASCII. parser.LINE_SEPARATOR_CHARS
-    and parser.ZERO_WIDTH_NO_BREAK_SPACE are the deliberate exceptions: all
-    three characters (U+2028/U+2029/U+FEFF) are data being matched against,
-    not text ever printed to a terminal -- every message that reports one
-    names it by its ASCII "U+FEFF"/"U+2028" form instead.
+    fails if any contains a character outside ASCII. parser.LINE_SEPARATOR_CHARS,
+    parser.ZERO_WIDTH_NO_BREAK_SPACE, and parser.ZERO_WIDTH_SPACE are the
+    deliberate exceptions: all four characters (U+2028/U+2029/U+FEFF/U+200B)
+    are data being matched against, not text ever printed to a terminal --
+    every message that reports one names it by its ASCII "U+FEFF"/"U+2028"
+    form instead.
     """
 
     FLASHBACK_DIR = Path(__file__).resolve().parent.parent / "flashback"
@@ -2408,7 +2419,7 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
         return ids
 
     def test_no_non_ascii_characters_in_printed_message_literals(self):
-        comparison_data_chars = {"\u2028", "\u2029", "\ufeff"}
+        comparison_data_chars = {"\u2028", "\u2029", "\ufeff", "\u200b"}
         offenders = []
         for filename in ("cli.py", "parser.py"):
             path = self.FLASHBACK_DIR / filename
@@ -3202,6 +3213,32 @@ class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertIn("byte-order-mark", buf.getvalue())
+
+    def test_decks_dir_with_zero_width_space_is_rejected_before_writing_the_card(self):
+        # U+200B (zero-width space) is invisible everywhere, the same
+        # "looks the same, isn't" risk already blocked above for the
+        # byte-order mark -- but _invalid_dir_arg was never given the same
+        # check for it either.
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0x200B)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+
+        rc = main(
+            ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_decks_dir_error_message_names_the_zero_width_space(self):
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0x200B)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            rc = main(["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("zero-width space", buf.getvalue())
 
 
 @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo is POSIX-only, like the rest of this project's locking")

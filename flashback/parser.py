@@ -81,6 +81,21 @@ def _is_unicode_tag_char(ch: str) -> bool:
 # but isn't" failure shape every other check in this module closes.
 ZERO_WIDTH_NO_BREAK_SPACE = "﻿"
 
+# U+200B, ZERO WIDTH SPACE. Also category Cf, also invisible in every modern
+# renderer -- but unlike ZWJ/ZWNJ (U+200D/U+200C, deliberately left allowed
+# just below) or the bidi/RTL controls, it has no legitimate rendering job
+# left to protect: it doesn't join or separate glyphs, doesn't change how
+# anything displays, and isn't part of any emoji or script-shaping sequence.
+# In modern practice it shows up almost exclusively as a copy-paste artifact
+# (many web pages insert it as an invisible "wrap hint") or deliberately, to
+# smuggle invisible content -- the identical role U+FEFF and the Tags block
+# already have checks for. Left unchecked, it's the same "looks the same,
+# isn't" gap those two close: a question with one spliced in prints
+# identically to the same question without it, yet compares unequal as text,
+# so `remove`/`edit`'s exact-match lookup reports "no card with that
+# question found" for a card that's genuinely sitting right there.
+ZERO_WIDTH_SPACE = "​"
+
 
 def normalize_question(question: str) -> str:
     """Normalize a question to NFC so it compares equal regardless of how its
@@ -388,6 +403,19 @@ def _check_card_text(question: str, answer: str) -> None:
     the same question without one, yet compares unequal as text -- the exact
     gap that makes `remove`/`edit`'s exact-match lookup report "no card with
     that question found" for a card that's genuinely right there.
+
+    A seventh case: U+200B, ZERO WIDTH SPACE (see ZERO_WIDTH_SPACE). Also
+    category Cf, so none of the checks above catch it either -- but unlike
+    ZWJ/ZWNJ (U+200D/U+200C, deliberately left allowed, see
+    test_emoji_sequence_with_zero_width_joiner_is_fine) or the bidi/RTL
+    controls, it has no legitimate content to protect: it doesn't join or
+    separate glyphs and isn't part of any emoji or script-shaping sequence,
+    so unlike those, rejecting it costs nothing. It's invisible in every
+    modern renderer, the identical "looks the same, isn't" consequence as
+    U+FEFF just above -- a question with one spliced in (a common copy-paste
+    artifact from web pages that use it as an invisible wrap hint) reads on
+    screen exactly like the same question without it, yet compares unequal
+    as text.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -444,6 +472,12 @@ def _check_card_text(question: str, answer: str) -> None:
                     f"{field_name} contains a byte-order-mark character (U+FEFF), which is "
                     "invisible and would make this look identical to the same text without "
                     "it -- not allowed in card text"
+                )
+            if ch == ZERO_WIDTH_SPACE:
+                raise ParseError(
+                    f"{field_name} contains a zero-width space (U+200B), which is invisible "
+                    "and would make this look identical to the same text without it -- not "
+                    "allowed in card text"
                 )
 
 

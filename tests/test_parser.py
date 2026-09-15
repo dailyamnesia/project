@@ -370,6 +370,24 @@ class TestAppendCard(unittest.TestCase):
         with self.assertRaises(ParseError):
             append_card("", "question", f"answer{chr(0xFEFF)}")
 
+    def test_question_with_zero_width_space_raises(self):
+        # U+200B (ZERO WIDTH SPACE) is category Cf, same as the Tags-block
+        # and byte-order-mark characters above, so none of the Cc/bidi/
+        # line-separator checks catch it -- and it's invisible in every
+        # renderer, with no legitimate joining/shaping role the way ZWJ/ZWNJ
+        # have (see test_emoji_sequence_with_zero_width_joiner_is_fine).
+        # Left unchecked, a question with one spliced in (a common
+        # copy-paste artifact from web pages that use it as an invisible
+        # wrap hint) prints identically to the same question without it,
+        # yet compares unequal as text -- so remove/edit exact-match
+        # lookups would fail to find a card that's genuinely right there.
+        with self.assertRaises(ParseError):
+            append_card("", f"question{chr(0x200B)}", "answer")
+
+    def test_answer_with_zero_width_space_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "question", f"answer{chr(0x200B)}")
+
     def test_hand_edited_line_separator_would_silently_change_the_question_on_reparse(self):
         # Demonstrates the actual failure this check exists to prevent:
         # bypass validation (the same way parse_deck's own `validate=False`
