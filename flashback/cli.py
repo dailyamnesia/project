@@ -994,9 +994,14 @@ def cmd_edit(args):
         except ParseError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
+        # Both shown before either prompt -- the README promises "showing
+        # you the current question and answer first so you can see what
+        # you're changing", which means seeing the whole card before
+        # deciding on either new value, not discovering the current answer
+        # only after already having answered the new-question prompt.
         print(f"current Q: {match.question}")
-        new_question = input("new Q (blank to keep): ").strip() or None
         print(f"current A: {match.answer}")
+        new_question = input("new Q (blank to keep): ").strip() or None
         new_answer = input("new A (blank to keep): ").strip() or None
         if new_question is None and new_answer is None:
             print("nothing changed.")

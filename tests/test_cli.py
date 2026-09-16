@@ -1497,6 +1497,30 @@ class TestEditCommand(unittest.TestCase):
         # refused before any write, so the poisoned text is untouched on disk
         self.assertEqual(deck_path.read_text(encoding="utf-8"), "Q: hello?\nA: bad\x07answer\n")
 
+    def test_interactive_preview_shows_current_answer_before_prompting_for_new_question(self):
+        # The README promises this prompt shows "the current question and
+        # answer first so you can see what you're changing" -- both, before
+        # either prompt. The unfixed code instead printed "current Q", then
+        # immediately blocked on input() for the new question, and only
+        # printed "current A" afterward -- so a user deciding what to
+        # replace the question with couldn't see the card's current answer
+        # for context until after they'd already answered that first
+        # prompt. Confirmed against the unfixed code: the first input()
+        # call happened with "current A:" not yet anywhere in stdout.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+
+        seen_answer_before_first_prompt = []
+
+        def fake_input(prompt):
+            seen_answer_before_first_prompt.append("current A: hola" in out.getvalue())
+            return ""
+
+        out = io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), redirect_stdout(out):
+            rc = self.run_flashback("edit", "spanish", "-q", "hello?")
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen_answer_before_first_prompt, [True, True])
+
     def test_interactive_preview_refuses_to_guess_which_duplicate_to_edit(self):
         # cmd_edit's own preview lookup (parse_deck(..., validate=False) then
         # a plain `next(...)` for the *first* match) predates edit_card()'s
