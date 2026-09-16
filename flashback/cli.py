@@ -954,13 +954,32 @@ def cmd_edit(args):
         # unrelated card in the same deck failing _check_card_text.
         # edit_card() below still validates whatever new text is actually
         # written.
-        match = next((c for c in parse_deck(preview_text, validate=False) if c.question == question), None)
+        matches = [c for c in parse_deck(preview_text, validate=False) if c.question == question]
     except ParseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    if match is None:
+    if not matches:
         print(f"error: no card with that question found: {question!r}", file=sys.stderr)
         return 1
+    if len(matches) > 1:
+        # edit_card() below already refuses to guess which of several
+        # same-question cards is meant (a hand-edited duplicate, tolerated
+        # here by the validate=False parse above so it doesn't block editing
+        # some other, unrelated card) -- but that check doesn't run until
+        # after this preview has already picked one of them (via `next`,
+        # arbitrarily, by parse order) to print as "current Q/A" and prompt
+        # for new content against. Checking here too, before printing or
+        # prompting for anything, avoids showing one arbitrarily-chosen
+        # duplicate's content as if it were the card's only content and only
+        # then discovering the ambiguity after the person has already
+        # answered both prompts.
+        print(
+            f"error: {len(matches)} cards share this same question ({question!r}) -- refusing to "
+            "guess which one you mean to edit; fix the duplicate by hand, then edit/sync again",
+            file=sys.stderr,
+        )
+        return 1
+    match = matches[0]
 
     new_question = args.new_question
     new_answer = args.new_answer

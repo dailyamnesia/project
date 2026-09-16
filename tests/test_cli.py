@@ -1497,6 +1497,37 @@ class TestEditCommand(unittest.TestCase):
         # refused before any write, so the poisoned text is untouched on disk
         self.assertEqual(deck_path.read_text(encoding="utf-8"), "Q: hello?\nA: bad\x07answer\n")
 
+    def test_interactive_preview_refuses_to_guess_which_duplicate_to_edit(self):
+        # cmd_edit's own preview lookup (parse_deck(..., validate=False) then
+        # a plain `next(...)` for the *first* match) predates edit_card()'s
+        # own duplicate-refusal fix (parser.edit_card raises when more than
+        # one card shares a question) and was never updated to match: given a
+        # hand-edited deck with two cards sharing a question, this picked one
+        # of them arbitrarily, printed its answer as "current A" and prompted
+        # for new question/answer text -- only for edit_card(), called much
+        # later, to then refuse the whole edit as ambiguous. Confirmed
+        # against the unfixed code: this printed "current A: hello" (one
+        # arbitrary duplicate's answer, not flagged as ambiguous in any way),
+        # accepted a new-answer prompt, and only then said "2 cards share
+        # this same question ... refusing to guess" -- a wasted round of
+        # prompts, and a misleading preview, for something that was always
+        # going to be refused.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        deck_path = self.decks_dir / "spanish.md"
+        deck_text = "Q: hola?\nA: hello\n\n---\n\nQ: hola?\nA: HELLO-DUPLICATE\n"
+        deck_path.write_text(deck_text, encoding="utf-8")
+
+        out = io.StringIO()
+        with patch("builtins.input", side_effect=AssertionError("should not prompt")), redirect_stdout(
+            out
+        ):
+            rc = self.run_flashback("edit", "spanish", "-q", "hola?")
+        self.assertEqual(rc, 1)
+        self.assertNotIn("current A", out.getvalue())
+
+        # refused before any write, so the deck is untouched on disk.
+        self.assertEqual(deck_path.read_text(encoding="utf-8"), deck_text)
+
     def test_non_utf8_deck_file_fails_cleanly_instead_of_a_raw_traceback(self):
         # Same reasoning as add's equivalent test: `edit`'s preview read (and
         # its later re-read inside the lock) both used a plain Path.read_text
