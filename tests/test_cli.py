@@ -775,6 +775,75 @@ class TestAddCommand(unittest.TestCase):
         cards = parse_deck(deck_path.read_text(encoding="utf-8"))
         self.assertEqual({c.question for c in cards}, {f"q{i}?" for i in range(8)})
 
+    @unittest.skipIf(os.name == "nt", "the lock this guards against is POSIX-only (fcntl)")
+    def test_concurrent_adds_via_symlinked_decks_sharing_one_real_file_do_not_lose_cards(self):
+        # Same lost-update race as test_concurrent_adds_to_the_same_deck_do_not_lose_cards
+        # above, but reached through a symlink instead of a shared --decks-dir
+        # or a shared --state-dir. _atomic_write_text already documents a
+        # symlinked deck file as normal ("a deck file kept somewhere else and
+        # linked into decks_dir -- e.g. a shared repo of deck content"), which
+        # means the *real* file two `add`s race over can be identical even
+        # when each `add` uses its own, distinct --decks-dir: two
+        # collaborators each pointing a personal decks directory's
+        # "spanish.md" at one shared file via a symlink, say.
+        #
+        # `_deck_lock_path` used to key its lock file purely off `decks_dir`'s
+        # own resolved path plus the deck name -- never resolving `deck_path`
+        # itself -- so two `add`s through two different `--decks-dir`s (each
+        # containing nothing but a symlink to the one shared real file) got
+        # two different lock keys despite both actually writing the same
+        # target, reintroducing the exact silent lost-update race this lock
+        # exists to prevent, just through a symlink instead of the
+        # `--state-dir` door the preceding test already closed. Confirmed
+        # directly against the pre-fix code: 8 concurrent `add`s, one per
+        # personal --decks-dir all symlinking the same shared deck file, lost
+        # 4 of 8 cards, every worker still printing a normal "added" message
+        # and exiting 0.
+        shared = Path(self._tmp.name) / "shared-spanish.md"
+        shared.write_text("", encoding="utf-8")
+        decks_dirs = []
+        for i in range(8):
+            d = Path(self._tmp.name) / f"decks-{i}"
+            d.mkdir()
+            os.symlink(shared, d / "spanish.md")
+            decks_dirs.append(d)
+
+        barrier = threading.Barrier(8)
+        errors = []
+
+        def worker(i):
+            state_dir = Path(self._tmp.name) / f"state-{i}"
+            barrier.wait()
+            try:
+                rc = main(
+                    [
+                        "--decks-dir",
+                        str(decks_dirs[i]),
+                        "--state-dir",
+                        str(state_dir),
+                        "add",
+                        "spanish",
+                        "-q",
+                        f"q{i}?",
+                        "-a",
+                        f"a{i}",
+                    ]
+                )
+                if rc != 0:
+                    errors.append(f"worker {i} exited {rc}")
+            except Exception as exc:  # noqa: BLE001 - recording, not swallowing
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        cards = parse_deck(shared.read_text(encoding="utf-8"))
+        self.assertEqual({c.question for c in cards}, {f"q{i}?" for i in range(8)})
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):

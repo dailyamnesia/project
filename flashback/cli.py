@@ -410,21 +410,50 @@ def _lock_dir() -> Path:
     return Path(tempfile.gettempdir())
 
 
-def _deck_lock_path(decks_dir: Path, deck: str) -> Path:
-    """Return the lock file path for `deck` in `decks_dir`.
+def _deck_lock_path(deck_path: Path) -> Path:
+    """Return the lock file path for the deck backed by `deck_path`.
 
-    Keyed by `decks_dir`'s *resolved* (absolute, symlink-followed) path plus
-    the deck name, the same identity `cmd_sync`/`sync_deck`/`DeckDirMismatch`
-    already use to recognize "this is the same deck" across differently
-    -- but equivalently -- spelled `--decks-dir` values (a relative path from
-    one cwd, an absolute path, a path through a symlink). `--state-dir` is
-    deliberately *not* part of this key: unlike `--decks-dir`, nothing ties
-    a `--state-dir` to a particular deck file at all, and two flashback
+    Keyed by `deck_path`'s own *resolved* (absolute, symlink-followed) path,
+    the same identity `cmd_sync`/`sync_deck`/`DeckDirMismatch` already use to
+    recognize "this is the same deck" across differently -- but equivalently
+    -- spelled `--decks-dir` values (a relative path from one cwd, an
+    absolute path, a path through a symlink). `--state-dir` is deliberately
+    *not* part of this key: unlike `--decks-dir`, nothing ties a
+    `--state-dir` to a particular deck file at all, and two flashback
     invocations are free to use different `--state-dir`s (different cwds
     with the default `--state-dir .flashback`, say) while still pointing at
     the exact same shared `--decks-dir` -- see `_deck_lock`'s docstring for
     why locking under `--state-dir` used to silently fail to protect exactly
     that case.
+
+    Resolving `deck_path` itself, not just its parent `decks_dir`, matters for
+    the identical reason one level down: `_atomic_write_text` already treats a
+    symlinked deck file as normal (see its own docstring -- "a deck file kept
+    somewhere else and linked into decks_dir, e.g. a shared repo of deck
+    content"), which means the *real* file two `add`/`remove`/`edit` calls
+    are racing over can be the exact same target even when their `deck_path`
+    guesses live under two different `--decks-dir`s (two collaborators each
+    symlinking a personal decks directory's "spanish.md" at one shared file,
+    say). An earlier version of this function keyed purely off `decks_dir`
+    plus the deck name, which gave those two calls two different lock keys
+    for the one real file they both actually write to -- reintroducing, via a
+    symlink instead of a mismatched `--state-dir`, the exact same silent
+    lost-update race this lock exists to prevent (confirmed directly: 8
+    concurrent `add`s, one per personal `--decks-dir` all symlinking the same
+    shared deck file, lost 4 of 8 cards with the old, `decks_dir`-keyed lock,
+    every worker still printing a normal "added" message and exiting 0).
+    Resolving `deck_path` collapses any such symlink down to the one real
+    target both calls are actually contending for, the same way it already
+    collapses two spellings of `decks_dir` itself down to one identity.
+
+    `Path.resolve()` raises a bare `RuntimeError`, not `OSError`, for a
+    self-referential symlink loop (see `_is_symlink_loop`) -- a real,
+    reachable deck-file state elsewhere in this file, not just a
+    hypothetical here. A loop has no real target to collapse onto, so this
+    falls back to `deck_path` unresolved, which is still a stable, unique key
+    for repeated calls against that same loop; `_read_deck_text`/
+    `_atomic_write_text` already give a clean, accurate error for the loop
+    itself once inside the lock, so nothing here needs to.
 
     The lock file itself lives under the system temp directory, not inside
     `decks_dir`: `_deck_lock` still needs somewhere all cooperating
@@ -433,9 +462,13 @@ def _deck_lock_path(decks_dir: Path, deck: str) -> Path:
     one that's never cleaned up, since `flock` -- not deletion -- is what
     signals "unlocked") is exactly what the earlier, `--state-dir`-based
     design went out of its way to avoid. The hash keeps the filename short
-    and free of any character `decks_dir`/`deck` could themselves contain.
+    and free of any character `deck_path` could itself contain.
     """
-    key = hashlib.sha1(f"{decks_dir.resolve()}\x00{deck}".encode("utf-8")).hexdigest()
+    try:
+        resolved = deck_path.resolve()
+    except RuntimeError:
+        resolved = deck_path
+    key = hashlib.sha1(str(resolved).encode("utf-8")).hexdigest()
     return _lock_dir() / f"flashback-{key}.lock"
 
 
@@ -800,7 +833,7 @@ def cmd_add(args):
     question = args.question if args.question is not None else input("Q: ")
     answer = args.answer if args.answer is not None else input("A: ")
 
-    with _deck_lock(_deck_lock_path(decks_dir, args.deck), Path(args.state_dir)):
+    with _deck_lock(_deck_lock_path(deck_path), Path(args.state_dir)):
         # Re-check for a collision now, not just once before the interactive
         # question/answer prompts above: those prompts (like edit's, per its
         # own docstring) can take arbitrarily long, and a second, colliding
@@ -859,7 +892,7 @@ def cmd_remove(args):
 
     question = args.question if args.question is not None else input("Q: ")
 
-    with _deck_lock(_deck_lock_path(decks_dir, args.deck), Path(args.state_dir)):
+    with _deck_lock(_deck_lock_path(deck_path), Path(args.state_dir)):
         # Re-check for a collision now, not just once before the (possibly
         # interactive, possibly long) -q prompt above -- see cmd_add's
         # identical re-check for why a second, colliding deck file appearing
@@ -1013,7 +1046,7 @@ def cmd_edit(args):
     # read (by another flashback process, or by hand). edit_card() below
     # must act on the current on-disk content, not a stale snapshot from
     # before the prompts.
-    with _deck_lock(_deck_lock_path(decks_dir, args.deck), Path(args.state_dir)):
+    with _deck_lock(_deck_lock_path(deck_path), Path(args.state_dir)):
         # Re-check for a collision now, not just once before the interactive
         # prompts above -- see cmd_add's identical re-check for why a second,
         # colliding deck file appearing during that (potentially arbitrarily
