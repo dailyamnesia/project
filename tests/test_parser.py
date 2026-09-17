@@ -97,6 +97,42 @@ class TestParser(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_deck(text)
 
+    def test_missing_separator_error_escapes_control_character_in_block_context(self):
+        # The missing-'---'-separator ParseError above quotes the whole
+        # surrounding block verbatim (unlike every other message in this
+        # module, which only ever interpolates an already-`!r`-escaped
+        # single line) so a hand-edited deck file's own '---'-omission
+        # mistake is easy to spot with real multi-line context. But `sync`
+        # prints that message straight to the terminal via
+        # `print(..., file=sys.stderr)` — a control character sitting
+        # anywhere else in that same block used to reach the terminal raw,
+        # the exact "manipulate the terminal when displayed" risk
+        # `_check_card_text` exists to keep out of stored card text in the
+        # first place, just reached through the block-dump side door
+        # instead of storage.
+        text = "Q: first\nA: first answer\nQ: bad\x01line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("\x01", str(ctx.exception))
+        self.assertIn("\\x01", str(ctx.exception))
+
+    def test_missing_separator_error_escapes_bidi_override_in_block_context(self):
+        text = "Q: first\nA: first answer\nQ: evil‮txt.exe\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("‮", str(ctx.exception))
+
+    def test_missing_separator_error_keeps_ordinary_block_context_readable(self):
+        # The escaping above must be narrowly scoped to the two
+        # terminal-manipulating classes -- real newlines and ordinary
+        # printable (including non-ASCII) text must still come through
+        # untouched, or the verbatim block loses the readability it exists
+        # for in the common (no dangerous characters) case.
+        text = "Q: café\nA: first answer\nQ: second\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertIn("Q: café\nA: first answer", str(ctx.exception))
+
     def test_duplicate_question_in_same_deck_raises(self):
         text = "Q: hola\nA: hi\n---\nQ: hola\nA: hello (again)\n"
         with self.assertRaises(ParseError):

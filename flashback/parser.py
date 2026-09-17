@@ -196,6 +196,39 @@ def parse_deck(text: str, *, validate: bool = True) -> list[Card]:
     return cards
 
 
+def _sanitize_block_for_display(block: str) -> str:
+    """Escape characters in a raw deck-file excerpt that could hide or reorder
+    what's shown on screen, before it's quoted back inside a ParseError.
+
+    A ParseError raised below this point (a missing '---' separator, a
+    stray 'Q:'/'A:' line, text before the first 'Q:') includes the whole
+    surrounding block verbatim, unlike every other message in this module,
+    which only ever interpolates an already-`!r`-escaped single line or
+    value. That's deliberate here, for readability -- a missing separator is
+    much easier to spot with real multi-line context than with a single
+    escaped line -- but it means whatever a hand-edited deck file actually
+    contains reaches sync's `print(..., file=sys.stderr)` output raw. A
+    control character or bidi-formatting character is exactly the content
+    `_check_card_text` rejects from ever being *stored* in a card for this
+    same reason; it can still reach here, unvalidated, on the very same
+    malformed block that's about to be rejected instead of stored -- so this
+    escapes just those two classes (matching `_check_card_text`'s own
+    "manipulates the terminal" framing) while leaving real newlines and
+    ordinary printable text untouched, preserving the readability the
+    verbatim block exists for.
+    """
+    return "".join(
+        ch
+        if ch in ("\n", "\t")
+        or not (
+            unicodedata.category(ch) == "Cc"
+            or unicodedata.bidirectional(ch) in BIDI_FORMATTING_CLASSES
+        )
+        else ch.encode("unicode_escape").decode("ascii")
+        for ch in block
+    )
+
+
 def _parse_card(block: str) -> Card:
     question_lines = []
     answer_lines = []
@@ -224,7 +257,7 @@ def _parse_card(block: str) -> Card:
                 raise ParseError(
                     "card has a second 'Q:' line after its answer already started "
                     f"({line!r}) -- this looks like two cards run together because a "
-                    f"'---' separator is missing between them:\n{block}"
+                    f"'---' separator is missing between them:\n{_sanitize_block_for_display(block)}"
                 )
             if section == "q":
                 # A second 'Q:' line while still *inside* the question — not
@@ -253,7 +286,7 @@ def _parse_card(block: str) -> Card:
                     "card has a second 'Q:' line while its question is still being "
                     f"read ({line!r}) -- if this is meant to be part of the question "
                     "text rather than a new question, break up the line (e.g. a "
-                    f"leading space) so it doesn't start with 'Q:':\n{block}"
+                    f"leading space) so it doesn't start with 'Q:':\n{_sanitize_block_for_display(block)}"
                 )
             section = "q"
             question_lines.append(Q_PREFIX.sub("", line, count=1))
@@ -268,7 +301,7 @@ def _parse_card(block: str) -> Card:
                     "card has a second 'A:' line while its answer is still being "
                     f"read ({line!r}) -- if this is meant to be part of the answer "
                     "text rather than a new answer, break up the line (e.g. a "
-                    f"leading space) so it doesn't start with 'A:':\n{block}"
+                    f"leading space) so it doesn't start with 'A:':\n{_sanitize_block_for_display(block)}"
                 )
             section = "a"
             answer_lines.append(A_PREFIX.sub("", line, count=1))
@@ -288,14 +321,14 @@ def _parse_card(block: str) -> Card:
             # about-to-be-lost content can.
             raise ParseError(
                 f"card has text before its first 'Q:' line, which would be silently "
-                f"discarded ({line!r}):\n{block}"
+                f"discarded ({line!r}):\n{_sanitize_block_for_display(block)}"
             )
 
     question = normalize_question("\n".join(question_lines).strip())
     answer = "\n".join(answer_lines).strip()
 
     if not question:
-        raise ParseError(f"card has no question:\n{block}")
+        raise ParseError(f"card has no question:\n{_sanitize_block_for_display(block)}")
     if not answer:
         raise ParseError(f"card has no answer for question: {question!r}")
 
