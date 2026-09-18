@@ -844,6 +844,106 @@ class TestAddCommand(unittest.TestCase):
         cards = parse_deck(shared.read_text(encoding="utf-8"))
         self.assertEqual({c.question for c in cards}, {f"q{i}?" for i in range(8)})
 
+    @unittest.skipIf(os.name == "nt", "the lock this guards against is POSIX-only (fcntl)")
+    def test_concurrent_adds_survive_the_deck_file_being_renamed_to_its_nfd_form_mid_race(self):
+        # Regression test for a lock-key staleness bug: cmd_add computes
+        # deck_path once (a guess via _find_deck_path), then -- after
+        # whatever the -q/-a prompts above take, which can run arbitrarily
+        # long -- used *that same, possibly stale* deck_path to build the
+        # deck lock's key, even though it goes on to re-resolve deck_path
+        # *again*, freshly, immediately before actually reading/writing,
+        # specifically because the file can have been renamed to a
+        # different (but equally valid) Unicode normalization form of the
+        # same deck name in that window (see _find_deck_path's own
+        # docstring for why that's real, not hypothetical -- an NFD-named
+        # file replacing an NFC one, e.g. via a filename-normalizing
+        # script). Locking on the stale pre-rename guess while reading and
+        # writing whatever the fresh re-resolve finds meant two concurrent
+        # adds to the exact same real target could end up computing two
+        # different lock keys and never actually serialize against each
+        # other at all -- confirmed directly against the pre-fix code below
+        # via the one deliberately-injected rename this test forces.
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        nfc_name = unicodedata.normalize("NFC", "café")
+        nfd_name = unicodedata.normalize("NFD", "café")
+        nfc_path = self.decks_dir / f"{nfc_name}.md"
+        nfd_path = self.decks_dir / f"{nfd_name}.md"
+        nfc_path.write_text("Q: existing?\nA: yes\n", encoding="utf-8")
+
+        from flashback import cli
+
+        real_find_deck_path = cli._find_deck_path
+        b_done = threading.Event()
+        thread_a_holder = {}
+        real_atomic_write_text = cli._atomic_write_text
+
+        # Simulates another process (or a person, or a normalizing script)
+        # renaming the deck file to its NFD spelling in the window between
+        # add's first, pre-prompt lookup and its lock-protected re-resolve
+        # -- exactly the window `_find_deck_path`'s own docstring describes.
+        # Fires on the very first call, whichever of the two racing `add`s
+        # happens to make it, so which one ends up the "victim" holding a
+        # stale lock key isn't fixed in advance -- only that one of them
+        # does.
+        first_call_done = threading.Event()
+
+        def fake_find_deck_path(decks_dir_arg, deck_name_arg):
+            result = real_find_deck_path(decks_dir_arg, deck_name_arg)
+            if not first_call_done.is_set():
+                first_call_done.set()
+                if nfc_path.exists():
+                    os.rename(nfc_path, nfd_path)
+            return result
+
+        # Forces thread A's read-modify-write to straddle thread B's own
+        # full read-modify-write cycle: without an actual pause here, both
+        # adds could easily just run one after another, which would be
+        # correct (if slow) even with the bug. A short timeout (rather than
+        # an unconditional wait) means this can't hang the suite if the fix
+        # already serializes the two adds under one real lock -- in that
+        # case B blocks on the OS-level lock A holds, never reaches the
+        # point that sets b_done, and A simply proceeds once the timeout
+        # lapses, by which point there is nothing left to race.
+        def fake_atomic_write_text(path, data):
+            if threading.current_thread() is thread_a_holder.get("thread"):
+                b_done.wait(timeout=2)
+            return real_atomic_write_text(path, data)
+
+        def worker_a():
+            rc = self.run_flashback("add", nfc_name, "-q", "from-a?", "-a", "A")
+            self.assertEqual(rc, 0)
+
+        def worker_b():
+            first_call_done.wait(timeout=2)
+            rc = self.run_flashback("add", nfc_name, "-q", "from-b?", "-a", "B")
+            self.assertEqual(rc, 0)
+            b_done.set()
+
+        thread_a = threading.Thread(target=worker_a)
+        thread_b = threading.Thread(target=worker_b)
+        thread_a_holder["thread"] = thread_a
+
+        with patch("flashback.cli._find_deck_path", side_effect=fake_find_deck_path), patch(
+            "flashback.cli._atomic_write_text", side_effect=fake_atomic_write_text
+        ):
+            thread_a.start()
+            thread_b.start()
+            thread_a.join(timeout=10)
+            thread_b.join(timeout=10)
+
+        self.assertFalse(thread_a.is_alive())
+        self.assertFalse(thread_b.is_alive())
+
+        final_path = nfd_path if nfd_path.exists() else nfc_path
+        cards = parse_deck(final_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            {c.question for c in cards},
+            {"existing?", "from-a?", "from-b?"},
+            "one add's card was silently lost -- the two concurrent adds locked "
+            "on two different keys for what was, the whole time, the exact same "
+            "real deck file",
+        )
+
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):

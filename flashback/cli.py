@@ -833,6 +833,25 @@ def cmd_add(args):
     question = args.question if args.question is not None else input("Q: ")
     answer = args.answer if args.answer is not None else input("A: ")
 
+    # Re-resolve deck_path now, immediately before computing the lock key
+    # from it: the prompts just above can take arbitrarily long, and the
+    # file backing this deck name can be renamed in that window to a
+    # different (but equally valid) Unicode normalization form of the same
+    # name -- see _find_deck_path's own docstring. _deck_lock_path hashes
+    # deck_path's own *resolved* path to build the lock's identity, so
+    # locking with the stale, pre-prompt guess while the re-resolve just
+    # inside the lock below goes on to find a *different* real file means
+    # two concurrent adds to the exact same real target could compute two
+    # different lock keys and never actually serialize against each other
+    # at all -- confirmed directly: two adds racing the same deck, one
+    # renamed out from under it (NFC to NFD) between this point and the old
+    # lock-then-resolve order, silently drop one of the two cards, each
+    # side still printing a normal "added" message and exiting 0. The exact
+    # silent lost-update shape `_deck_lock` exists to prevent, just reached
+    # through a rename instead of the mismatched --state-dir or shared
+    # symlink target already covered above.
+    deck_path = _find_deck_path(decks_dir, args.deck)
+
     with _deck_lock(_deck_lock_path(deck_path), Path(args.state_dir)):
         # Re-check for a collision now, not just once before the interactive
         # question/answer prompts above: those prompts (like edit's, per its
@@ -891,6 +910,15 @@ def cmd_remove(args):
         return 1
 
     question = args.question if args.question is not None else input("Q: ")
+
+    # Re-resolve deck_path now, immediately before computing the lock key
+    # from it -- see cmd_add's identical re-resolve for why locking with a
+    # guess made before this (possibly interactive, possibly long) -q prompt
+    # can hand two concurrent removes of the same real deck file two
+    # different lock keys if it's renamed (e.g. NFC to NFD) during the
+    # prompt, silently defeating the serialization _deck_lock exists to
+    # provide.
+    deck_path = _find_deck_path(decks_dir, args.deck)
 
     with _deck_lock(_deck_lock_path(deck_path), Path(args.state_dir)):
         # Re-check for a collision now, not just once before the (possibly
@@ -1046,6 +1074,16 @@ def cmd_edit(args):
     # read (by another flashback process, or by hand). edit_card() below
     # must act on the current on-disk content, not a stale snapshot from
     # before the prompts.
+    #
+    # Re-resolve deck_path itself here too, immediately before computing the
+    # lock key from it -- see cmd_add's identical re-resolve for why locking
+    # with a guess made before the (possibly arbitrarily long, per this
+    # function's own docstring) prompts above can hand two concurrent edits
+    # of the same real deck file two different lock keys if it's renamed
+    # (e.g. NFC to NFD) during that window, silently defeating the
+    # serialization _deck_lock exists to provide.
+    deck_path = _find_deck_path(decks_dir, args.deck)
+
     with _deck_lock(_deck_lock_path(deck_path), Path(args.state_dir)):
         # Re-check for a collision now, not just once before the interactive
         # prompts above -- see cmd_add's identical re-check for why a second,
