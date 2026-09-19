@@ -122,6 +122,63 @@ class TestParser(unittest.TestCase):
             parse_deck(text)
         self.assertNotIn("‮", str(ctx.exception))
 
+    def test_missing_separator_error_escapes_line_separator_in_block_context(self):
+        # _check_card_text rejects U+2028/U+2029 from ever being *stored* in a
+        # card, for the same "manipulates the terminal" reason it rejects a
+        # control character or bidi override (see LINE_SEPARATOR_CHARS in
+        # parser.py, and README's "breaks stats's tabular layout" framing):
+        # most terminals render U+2028/U+2029 as a real line break. The
+        # missing-'---'-separator ParseError's own verbatim block dump only
+        # escaped the control-character and bidi-override classes (see the
+        # two tests just above) -- a U+2028/U+2029 sitting in that same block
+        # reached `sync`'s `print(..., file=sys.stderr)` raw, injecting a
+        # phantom extra line break into the exact "real multi-line context"
+        # this block dump exists to show faithfully, undermining the one
+        # thing it's for.
+        text = "Q: first\nA: first answer\nQ: bad line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn(" ", str(ctx.exception))
+        self.assertIn("\\u2028", str(ctx.exception))
+
+    def test_missing_separator_error_escapes_unicode_tag_character_in_block_context(self):
+        # Same gap as the line-separator case just above, for Unicode's
+        # "Tags" block (see UNICODE_TAG_RANGE): every code point in it has no
+        # visible glyph in any conformant font, so an unescaped one riding
+        # along in this same verbatim block dump would smuggle an entirely
+        # invisible payload into `sync`'s stderr output -- the exact
+        # "ASCII smuggling"/hidden-payload risk `_check_card_text` already
+        # rejects this block for when it ends up *stored* in a card, reached
+        # here instead through the block-dump side door.
+        text = "Q: first\nA: first answer\nQ: bad\U000E0041line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("\U000E0041", str(ctx.exception))
+        self.assertIn("\\U000e0041", str(ctx.exception))
+
+    def test_missing_separator_error_escapes_byte_order_mark_in_block_context(self):
+        # Same gap, for U+FEFF (the byte-order mark, see
+        # ZERO_WIDTH_NO_BREAK_SPACE): invisible outside position zero of a
+        # file, so an unescaped one in this block dump would make two
+        # otherwise-identical-looking error messages compare (and print)
+        # differently, with no visible trace of why.
+        text = "Q: first\nA: first answer\nQ: bad﻿line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("﻿", str(ctx.exception))
+        self.assertIn("\\ufeff", str(ctx.exception))
+
+    def test_missing_separator_error_escapes_zero_width_space_in_block_context(self):
+        # Same gap, for U+200B (zero-width space, see ZERO_WIDTH_SPACE):
+        # invisible in every renderer, with no legitimate joining/shaping
+        # role, so an unescaped one in this block dump is pure, silent noise
+        # riding along with no visible trace.
+        text = "Q: first\nA: first answer\nQ: bad​line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("​", str(ctx.exception))
+        self.assertIn("\\u200b", str(ctx.exception))
+
     def test_missing_separator_error_keeps_ordinary_block_context_readable(self):
         # The escaping above must be narrowly scoped to the two
         # terminal-manipulating classes -- real newlines and ordinary
