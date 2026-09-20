@@ -3112,6 +3112,42 @@ class TestDeckFilterValidation(unittest.TestCase):
         self.assertTrue(any(line.startswith("empty") for line in lines))
         self.assertTrue(any(line.startswith("full") for line in lines))
 
+    def test_mistyped_deck_flag_is_rejected_not_silently_ignored(self):
+        # `due`/`review`/`stats`/`hard` each carry both a meaningful `--deck`
+        # (the filter tested throughout this class) and an inert, inherited
+        # `--decks-dir` (see _add_shared_dir_args -- accepted on every
+        # subcommand for a consistent flag surface, but never actually read
+        # by any of these four, which only touch --state-dir). "--decks" is
+        # a very plausible typo of "--deck" for a command whose whole subject
+        # is decks -- and, with argparse's default abbreviation matching, it
+        # was also a valid *unique* abbreviation of "--decks-dir" ("--deck"
+        # itself is too short to be a prefix of "--decks", so argparse's
+        # ambiguity check never even saw a conflict). That meant `stats
+        # --decks spanish` used to silently bind "spanish" to the unused
+        # --decks-dir instead of the real --deck filter, with no error at
+        # all, and print every synced deck instead of just the one named --
+        # exactly the "typo silently does something else, looks like it
+        # worked" failure shape `_check_deck_filter` exists to prevent for a
+        # mistyped *value*, just reached through a mistyped *flag name*
+        # instead. build_parser() now disables abbreviation on every parser
+        # (allow_abbrev=False) so a flag-name typo is a clean, loud error
+        # instead of a silent, wrong match.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        self.run_flashback("add", "italian", "-q", "ciao?", "-a", "hello")
+        self.run_flashback("sync")
+
+        for command in ("due", "review", "stats", "hard"):
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                with self.assertRaises(SystemExit) as ctx:
+                    self.run_flashback(command, "--decks", "spanish")
+            self.assertEqual(ctx.exception.code, 2, f"{command} --decks spanish")
+            self.assertIn("unrecognized arguments", err.getvalue())
+            # Above all, this must not be silently treated as an accepted,
+            # unfiltered run that lists both decks -- the exact silent
+            # failure this test guards against.
+            self.assertNotIn("italian", out.getvalue())
+
 
 class TestGlobalDirOptionsPlacement(unittest.TestCase):
     # `--decks-dir`/`--state-dir` used to be defined only on the top-level

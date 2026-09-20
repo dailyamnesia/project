@@ -1415,20 +1415,50 @@ def _add_shared_dir_args(parser, *, top_level=False):
 
 
 def build_parser():
+    # allow_abbrev=False on every parser/subparser below (not just the
+    # top-level one -- each subparser is its own independent
+    # ArgumentParser, so the setting doesn't inherit): argparse's default
+    # unique-prefix abbreviation is a real footgun on `due`/`review`/
+    # `stats`/`hard`, which each carry both a meaningful `--deck` (the
+    # filter these commands document and README examples rely on) and an
+    # inert, inherited `--decks-dir` (see _add_shared_dir_args -- accepted
+    # for a consistent flag surface across every subcommand, but never
+    # actually read by any of these four, which only touch --state-dir).
+    # "--deck" is a plausible typo for "--decks" (these commands are about
+    # decks, plural), and "--decks" is a valid unique abbreviation of
+    # "--decks-dir" (it's not a prefix of the shorter "--deck", so
+    # argparse doesn't even flag it as ambiguous) -- so `flashback stats
+    # --decks spanish` used to silently bind that value to the unused
+    # --decks-dir instead of the real --deck filter, with no error at all,
+    # and print every deck's stats instead of just the one the user typed.
+    # Confirmed directly: with two synced decks, `stats --decks spanish`
+    # printed both, identical to plain `stats` with no --deck at all.
+    # Disabling abbreviation everywhere (rather than only where this
+    # specific collision happens to arise today) closes the whole class of
+    # "a flag-name typo silently resolves to some other, unrelated flag
+    # instead of erroring" -- the same shape as this codebase's existing
+    # unknown---deck-value check, just for a mistyped flag name instead of
+    # a mistyped value.
     parser = argparse.ArgumentParser(
-        prog="flashback", description="A plain-text, spaced-repetition flashcard tool."
+        prog="flashback",
+        description="A plain-text, spaced-repetition flashcard tool.",
+        allow_abbrev=False,
     )
     parser.add_argument("--version", action="version", version=f"flashback {__version__}")
     _add_shared_dir_args(parser, top_level=True)
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_sync = sub.add_parser("sync", help="load deck files into the review database")
+    p_sync = sub.add_parser(
+        "sync", help="load deck files into the review database", allow_abbrev=False
+    )
     _add_shared_dir_args(p_sync)
     p_sync.set_defaults(func=cmd_sync)
 
     p_add = sub.add_parser(
-        "add", help="add a card to a deck file (creates it if it doesn't exist)"
+        "add",
+        help="add a card to a deck file (creates it if it doesn't exist)",
+        allow_abbrev=False,
     )
     p_add.add_argument("deck", help="deck name (the deck file's stem, e.g. 'spanish-basics')")
     p_add.add_argument("-q", "--question", help="the question (prompted for if omitted)")
@@ -1436,13 +1466,17 @@ def build_parser():
     _add_shared_dir_args(p_add)
     p_add.set_defaults(func=cmd_add)
 
-    p_remove = sub.add_parser("remove", help="remove a card from a deck file, by question")
+    p_remove = sub.add_parser(
+        "remove", help="remove a card from a deck file, by question", allow_abbrev=False
+    )
     p_remove.add_argument("deck", help="deck name (the deck file's stem, e.g. 'spanish-basics')")
     p_remove.add_argument("-q", "--question", help="the question to remove (prompted for if omitted)")
     _add_shared_dir_args(p_remove)
     p_remove.set_defaults(func=cmd_remove)
 
-    p_edit = sub.add_parser("edit", help="edit a card's question and/or answer in place")
+    p_edit = sub.add_parser(
+        "edit", help="edit a card's question and/or answer in place", allow_abbrev=False
+    )
     p_edit.add_argument("deck", help="deck name (the deck file's stem, e.g. 'spanish-basics')")
     p_edit.add_argument("-q", "--question", help="the question to edit (prompted for if omitted)")
     p_edit.add_argument("--new-question", help="replacement question text (kept as-is if omitted)")
@@ -1450,22 +1484,26 @@ def build_parser():
     _add_shared_dir_args(p_edit)
     p_edit.set_defaults(func=cmd_edit)
 
-    p_due = sub.add_parser("due", help="show how many cards are due, per deck")
+    p_due = sub.add_parser(
+        "due", help="show how many cards are due, per deck", allow_abbrev=False
+    )
     p_due.add_argument("--deck", help="limit to a single deck")
     _add_shared_dir_args(p_due)
     p_due.set_defaults(func=cmd_due)
 
-    p_review = sub.add_parser("review", help="review due cards")
+    p_review = sub.add_parser("review", help="review due cards", allow_abbrev=False)
     p_review.add_argument("--deck", help="limit to a single deck")
     _add_shared_dir_args(p_review)
     p_review.set_defaults(func=cmd_review)
 
-    p_stats = sub.add_parser("stats", help="show per-deck totals")
+    p_stats = sub.add_parser("stats", help="show per-deck totals", allow_abbrev=False)
     p_stats.add_argument("--deck", help="limit to a single deck")
     _add_shared_dir_args(p_stats)
     p_stats.set_defaults(func=cmd_stats)
 
-    p_hard = sub.add_parser("hard", help="show the cards you've found hardest")
+    p_hard = sub.add_parser(
+        "hard", help="show the cards you've found hardest", allow_abbrev=False
+    )
     p_hard.add_argument("--deck", help="limit to a single deck")
     p_hard.add_argument(
         "--limit",
