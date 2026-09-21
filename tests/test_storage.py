@@ -447,6 +447,94 @@ class TestStorage(unittest.TestCase):
                 "/decks/A",
             )
 
+    def test_sync_deck_dir_mismatch_check_is_atomic_under_a_concurrent_first_sync(self):
+        # Regression test for a check-then-act race in the DeckDirMismatch
+        # guard itself. The guard used to read the recorded decks_dir with a
+        # plain SELECT, decide "no mismatch" from that snapshot, and only
+        # *afterward* run an unconditional UPDATE stamping its own decks_dir
+        # -- a separate read then write, exactly the shape the
+        # INSERT-OR-IGNORE-plus-rowcount pattern just below already exists
+        # to avoid for the cards table. Two sync_deck calls racing the
+        # *first-ever* sync of the same deck name from two different, real,
+        # unrelated decks_dir's -- the exact scenario this whole guard
+        # exists to catch -- could both read "not yet recorded" before
+        # either had written anything, both conclude "no mismatch," and
+        # both go on to unconditionally overwrite decks_dir with their own
+        # value: the second writer's reconciliation then deletes the first
+        # writer's already-synced, unrelated card, with neither call ever
+        # raising DeckDirMismatch.
+        #
+        # Forces the exact interleaving needed to prove this: both threads'
+        # read of the not-yet-existing `decks` row happens (synchronized via
+        # the two events below) before either thread's own write.
+        today = date(2026, 1, 1)
+        with sqlite3.connect(self.db_path) as setup_conn:
+            setup_conn.executescript(SCHEMA)
+
+        a_read_done = threading.Event()
+        b_read_done = threading.Event()
+
+        def make_connection_class(my_event, other_event):
+            class RacingConnection(sqlite3.Connection):
+                def execute(self, sql, params=()):
+                    result = super().execute(sql, params)
+                    if sql.strip().startswith("INSERT OR IGNORE INTO decks"):
+                        my_event.set()
+                        other_event.wait(timeout=2)
+                    return result
+
+            return RacingConnection
+
+        outcomes = {}
+
+        def worker(decks_dir, cards, my_event, other_event):
+            conn = sqlite3.connect(
+                self.db_path, timeout=5, factory=make_connection_class(my_event, other_event)
+            )
+            conn.row_factory = sqlite3.Row
+            try:
+                added, removed = sync_deck(conn, "spanish", cards, today, decks_dir)
+                conn.commit()
+                outcomes[decks_dir] = ("ok", added, removed)
+            except DeckDirMismatch as exc:
+                outcomes[decks_dir] = ("mismatch", exc)
+            finally:
+                conn.close()
+
+        thread_a = threading.Thread(
+            target=worker,
+            args=("/decks/A", parse_deck("Q: hola?\nA: hello\n"), a_read_done, b_read_done),
+        )
+        thread_b = threading.Thread(
+            target=worker,
+            args=("/decks/B", parse_deck("Q: bonjour?\nA: hello (unrelated deck)\n"), b_read_done, a_read_done),
+        )
+        thread_a.start()
+        thread_b.start()
+        thread_a.join()
+        thread_b.join()
+
+        # Exactly one side wins (its card survives) and the other is
+        # refused outright with DeckDirMismatch -- never both silently
+        # "succeeding" with the loser's card quietly deleted, and never a
+        # crash from either side.
+        statuses = {decks_dir: outcome[0] for decks_dir, outcome in outcomes.items()}
+        self.assertEqual(sorted(statuses.values()), ["mismatch", "ok"])
+
+        winner = next(d for d, s in statuses.items() if s == "ok")
+        with open_db(self.db_path) as conn:
+            rows = conn.execute("SELECT deck, question, decks_dir FROM cards "
+                                 "JOIN decks ON decks.name = cards.deck "
+                                 "WHERE cards.deck = 'spanish'").fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["decks_dir"], winner)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT decks_dir FROM decks WHERE name = 'spanish'"
+                ).fetchone()[0],
+                winner,
+            )
+
     def test_known_decks_includes_a_deck_synced_with_zero_cards(self):
         # Regression test: a deck file that parses fine but has no cards in it
         # (a legitimately empty deck, not a mistake) used to leave no trace at

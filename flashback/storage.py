@@ -181,18 +181,55 @@ def sync_deck(conn, deck: str, cards, today: date, decks_dir: str = None):
     the same "unknown, not a proven collision" way prune_missing_decks
     already treats it, so this can't itself brick an ordinary first real
     sync after an upgrade.
-    """
-    existing_row = conn.execute("SELECT decks_dir FROM decks WHERE name = ?", (deck,)).fetchone()
-    if (
-        existing_row is not None
-        and existing_row["decks_dir"] is not None
-        and decks_dir is not None
-        and existing_row["decks_dir"] != decks_dir
-    ):
-        raise DeckDirMismatch(deck, existing_row["decks_dir"], decks_dir)
 
+    The check-and-stamp below is a single atomic conditional `UPDATE`
+    (`... WHERE name = ? AND (decks_dir IS NULL OR decks_dir = ?)`), not a
+    separate `SELECT` followed by an unconditional `UPDATE` (an earlier
+    version of this function). That separate-statements shape is a
+    check-then-act race across processes -- the identical shape the
+    `INSERT OR IGNORE` + `rowcount` pattern just below already exists to
+    avoid, for the *cards* table -- just one table up, for `decks_dir`
+    instead of a card's existence. Two `sync` runs racing the *first-ever*
+    sync of the same deck name from two different, genuinely unrelated
+    `--decks-dir`s (the exact scenario this whole check exists to catch)
+    could both run their `SELECT` before either had recorded anything, both
+    see no recorded `decks_dir` yet, and both conclude "no mismatch" -- then
+    both went on to unconditionally overwrite `decks_dir` with their own
+    value, the second writer silently winning and leaving its own
+    reconciliation below free to delete the first writer's already-synced
+    cards for that name, with neither run ever raising `DeckDirMismatch`.
+    Confirmed directly: two threads syncing an unrelated same-named
+    "spanish" deck from two different decks_dirs, synchronized so both read
+    the not-yet-recorded row before either wrote, raised no error in either
+    thread and silently deleted the loser's already-synced card from the
+    database, even though its own deck file was never touched. Folding the
+    check into the `UPDATE`'s own `WHERE` clause makes the read and the
+    write one indivisible operation from every other connection's point of
+    view -- exactly like `INSERT OR IGNORE` already does for a card's
+    existence -- so the second writer's `UPDATE` now matches zero rows
+    instead of silently overwriting the first writer's value, and this
+    function raises `DeckDirMismatch` for it instead.
+    """
     conn.execute("INSERT OR IGNORE INTO decks (name, decks_dir) VALUES (?, ?)", (deck, decks_dir))
-    conn.execute("UPDATE decks SET decks_dir = ? WHERE name = ?", (decks_dir, deck))
+    if decks_dir is not None:
+        cursor = conn.execute(
+            "UPDATE decks SET decks_dir = ? WHERE name = ? AND (decks_dir IS NULL OR decks_dir = ?)",
+            (decks_dir, deck, decks_dir),
+        )
+        if cursor.rowcount == 0:
+            # The conditional UPDATE above matched no row, so `deck` already
+            # has a different, concrete decks_dir recorded -- fetch it fresh
+            # (not a stale pre-write guess from a separate earlier SELECT)
+            # purely to name it in the error message.
+            recorded = conn.execute(
+                "SELECT decks_dir FROM decks WHERE name = ?", (deck,)
+            ).fetchone()["decks_dir"]
+            raise DeckDirMismatch(deck, recorded, decks_dir)
+    # decks_dir is None: the caller didn't pass a concrete directory (an
+    # older caller, or a test) -- nothing to reconcile or stamp, and
+    # leaving whatever's already recorded untouched matches the same "NULL
+    # means unknown, don't overwrite a real value with a guess" treatment
+    # the check above already gives a NULL *recorded* value.
     seen_ids = set()
     added = 0
     for card in cards:
