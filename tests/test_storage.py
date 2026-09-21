@@ -696,6 +696,63 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(saved["due_date"], due_a.isoformat())
             self.assertGreater(saved["easiness"], stale_row["easiness"])
 
+    def test_record_review_does_not_clobber_a_concurrent_review_at_the_easiness_floor(self):
+        # The race above (two sessions holding the same stale row) is caught
+        # because grading always changes at least one of repetitions/
+        # interval_days/easiness relative to the stale snapshot -- *unless*
+        # the card has already failed enough times to bottom out at
+        # MIN_EASINESS with repetitions at 0, which is a real fixed point of
+        # scheduler.review: every further AGAIN grade leaves
+        # (repetitions, interval_days, easiness) completely unchanged. Two
+        # ordinary AGAIN grades in a row (missing the same card twice, not an
+        # exotic scenario) reaches exactly that state.
+        today = date(2026, 1, 1)
+        with open_db(self.db_path) as conn:
+            sync_deck(conn, "d", parse_deck("Q: a\nA: 1\n"), today)
+            row = due_cards(conn, today)[0]
+
+            due1 = record_review(conn, row, Grade.AGAIN, today)
+            row = conn.execute("SELECT * FROM cards WHERE id = ?", (row["id"],)).fetchone()
+            due2 = record_review(conn, row, Grade.AGAIN, today + timedelta(days=1))
+            row = conn.execute("SELECT * FROM cards WHERE id = ?", (row["id"],)).fetchone()
+            self.assertIsNotNone(due1)
+            self.assertIsNotNone(due2)
+            self.assertEqual(row["repetitions"], 0)
+            self.assertEqual(row["interval_days"], 1)
+            self.assertAlmostEqual(row["easiness"], 1.3)
+
+            # This is the "fixed point" stale snapshot both sessions hold --
+            # its (repetitions, interval_days, easiness) is 0, 1, 1.3.
+            stale_row = row
+            today2 = today + timedelta(days=2)
+
+            # Session A grades AGAIN from the stale snapshot -- the fixed
+            # point means the row afterward reads back with the exact same
+            # (repetitions, interval_days, easiness) the stale snapshot had.
+            due_a = record_review(conn, stale_row, Grade.AGAIN, today2)
+            self.assertIsNotNone(due_a)
+            after_a = conn.execute(
+                "SELECT * FROM cards WHERE id = ?", (stale_row["id"],)
+            ).fetchone()
+            self.assertEqual(after_a["repetitions"], stale_row["repetitions"])
+            self.assertEqual(after_a["interval_days"], stale_row["interval_days"])
+            self.assertEqual(after_a["easiness"], stale_row["easiness"])
+
+            # Session B, still holding the same stale snapshot from before
+            # session A's write, grades GOOD -- a *different* outcome. Its
+            # UPDATE must not match: session A's write already landed.
+            due_b = record_review(conn, stale_row, Grade.GOOD, today2)
+            self.assertIsNone(due_b)
+
+            # The database must still reflect session A's AGAIN grade, not
+            # session B's GOOD clobbering it in on a stale read.
+            saved = conn.execute(
+                "SELECT repetitions, interval_days, due_date FROM cards WHERE id = ?",
+                (stale_row["id"],),
+            ).fetchone()
+            self.assertEqual(saved["repetitions"], 0)
+            self.assertEqual(saved["due_date"], due_a.isoformat())
+
     def test_open_db_seeds_a_gitignore_in_a_freshly_created_state_dir(self):
         # A user following the README into their own git-tracked decks
         # folder has no reason to know the review database needs its own

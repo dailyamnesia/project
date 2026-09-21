@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS cards (
     interval_days INTEGER NOT NULL DEFAULT 0,
     easiness REAL NOT NULL DEFAULT 2.5,
     due_date TEXT NOT NULL,
-    last_reviewed TEXT
+    last_reviewed TEXT,
+    version INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS decks (
     name TEXT PRIMARY KEY,
@@ -86,6 +87,16 @@ def open_db(db_path: Path):
         existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(decks)")}
         if "decks_dir" not in existing_columns:
             conn.execute("ALTER TABLE decks ADD COLUMN decks_dir TEXT")
+        # Migration for a database whose `cards` table predates the `version`
+        # column (see record_review for why it exists): same reasoning as the
+        # decks_dir migration just above -- CREATE TABLE IF NOT EXISTS is a
+        # no-op against an already-existing `cards` table, so an ALTER TABLE
+        # is the only way to get the column onto a database created before
+        # this column did. Existing rows get 0, same as a freshly-synced card
+        # already gets from the column's own DEFAULT.
+        existing_card_columns = {row[1] for row in conn.execute("PRAGMA table_info(cards)")}
+        if "version" not in existing_card_columns:
+            conn.execute("ALTER TABLE cards ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
         # Backfill for a database that already had cards before the `decks`
         # table existed: without this, a deck that's never been re-synced
         # since upgrading has real rows in `cards` but no row in `decks`,
@@ -360,12 +371,34 @@ def record_review(conn, card_row, grade: Grade, today: date):
     shape of lost update `_deck_lock` prevents for concurrent add/remove/edit,
     just one layer down, in the database rather than the file.
 
-    The `WHERE` clause below also requires the three fields grading actually
-    reads from (`repetitions`, `interval_days`, `easiness`) to still match what
-    `card_row` saw; if another process already moved them, this UPDATE matches
-    zero rows, same observable outcome as the card having been deleted
-    entirely — the caller already treats a zero-rowcount UPDATE as "nothing to
-    report as saved" for that reason.
+    The `WHERE` clause below matches on a dedicated `version` counter
+    (incremented on every successful write), not on `repetitions`/
+    `interval_days`/`easiness` matching what `card_row` saw — an earlier
+    version of this function compared those three fields directly, which
+    looks equivalent but isn't: `scheduler.review` has a real fixed point.
+    Once a card has failed enough times to bottom out at `MIN_EASINESS` with
+    `repetitions` at 0 (reachable after nothing more unusual than missing the
+    same card twice in a row — exactly the "card you keep forgetting" case
+    this whole tool exists to surface), every further AGAIN grade leaves
+    `(repetitions, interval_days, easiness)` bit-for-bit unchanged. Two
+    sessions racing a card in exactly that state — one grading AGAIN, the
+    other GOOD, both starting from the same stale snapshot — used to both
+    have their UPDATE match: the first writer's result happened to look
+    identical to the row the second writer was comparing against, so the
+    second writer's `WHERE` was satisfied even though a real write had
+    already landed in between, and it silently clobbered the first writer's
+    saved grade and due date with its own, no error either side (confirmed
+    directly: two AGAIN grades to reach the fixed point, then a simulated
+    race of AGAIN-then-GOOD from the same stale row — the GOOD grade's
+    UPDATE wrongly matched and overwrote the AGAIN grade's already-committed
+    due date, with `record_review` reporting success to both). `version` has
+    no such fixed point — it strictly increases on every write regardless of
+    what grade produced it — so a second writer's stale `version` can never
+    spuriously match a row a first writer has already touched, closing the
+    gap the three-field comparison left open. If another process already
+    moved it, this UPDATE matches zero rows, same observable outcome as the
+    card having been deleted entirely — the caller already treats a
+    zero-rowcount UPDATE as "nothing to report as saved" for that reason.
     """
     state = ReviewState(
         repetitions=card_row["repetitions"],
@@ -376,8 +409,9 @@ def record_review(conn, card_row, grade: Grade, today: date):
     due = today + timedelta(days=new_state.interval_days)
     cursor = conn.execute(
         """UPDATE cards
-           SET repetitions = ?, interval_days = ?, easiness = ?, due_date = ?, last_reviewed = ?
-           WHERE id = ? AND repetitions = ? AND interval_days = ? AND easiness = ?""",
+           SET repetitions = ?, interval_days = ?, easiness = ?, due_date = ?, last_reviewed = ?,
+               version = version + 1
+           WHERE id = ? AND version = ?""",
         (
             new_state.repetitions,
             new_state.interval_days,
@@ -385,9 +419,7 @@ def record_review(conn, card_row, grade: Grade, today: date):
             due.isoformat(),
             today.isoformat(),
             card_row["id"],
-            card_row["repetitions"],
-            card_row["interval_days"],
-            card_row["easiness"],
+            card_row["version"],
         ),
     )
     if cursor.rowcount == 0:
