@@ -61,6 +61,38 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(cards[0].question, "hello?")
         self.assertEqual(cards[0].answer, "hola")
 
+    def test_add_with_a_deck_name_near_the_filesystem_name_length_limit_succeeds(self):
+        # Nothing in `_invalid_deck_name` (or anywhere else) limits how long
+        # a deck name can be, but every real filesystem caps how long a
+        # single path *component* can be -- 255 bytes on ext4 and most other
+        # Linux filesystems. A deck name a handful of bytes under that cap
+        # already produces a valid "{name}.md" target filename on its own.
+        #
+        # `_atomic_write_text` used to build its temp file's name by
+        # decorating the *target's* name directly (a leading dot plus
+        # ".tmp{pid}"), which added enough overhead to push the *temp*
+        # file's name past the 255-byte limit even though the real target
+        # name it was about to replace would have fit comfortably under it
+        # -- so `add` failed with a raw "OSError: [Errno 36] File name too
+        # long" on a deck name nothing else in this CLI ever rejected or
+        # warned about. Confirmed directly before the fix: a 251-character
+        # deck name produces a 254-byte "{name}.md" target (fits), but the
+        # old temp name came to 266 bytes and failed outright.
+        #
+        # 251 is chosen so "{name}.md" (254 bytes) fits under the 255-byte
+        # limit but the old, longer temp-file scheme did not -- pinning
+        # down the exact boundary this regression is about, rather than an
+        # arbitrarily large name that could fail for an unrelated reason.
+        deck_name = "a" * 251
+        rc = self.run_flashback("add", deck_name, "-q", "hello?", "-a", "hola")
+        self.assertEqual(rc, 0)
+
+        deck_path = self.decks_dir / f"{deck_name}.md"
+        self.assertTrue(deck_path.exists())
+        cards = parse_deck(deck_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].question, "hello?")
+
     def test_deck_lock_file_does_not_leak_into_the_real_system_temp_dir(self):
         real_tmp_before = set(Path(tempfile.gettempdir()).glob("flashback-*.lock"))
 

@@ -382,6 +382,37 @@ def _atomic_write_text(path: Path, data: str) -> None:
     turns into a clean, one-line message. Without catching it here and
     re-raising as `OSError`, a symlink-loop deck file crashed with a raw
     traceback exposing local paths instead.
+
+    The temp file's name is built from a fixed-length hash of `target.name`,
+    not `target.name` itself (an earlier version of this function used
+    `f".{target.name}.tmp{os.getpid()}"` directly): nothing in `add`/
+    `_invalid_deck_name` limits how long a deck name can be, and every real
+    filesystem caps how long a single path *component* (not the whole path)
+    can be -- 255 bytes on ext4 and most other Linux filesystems. A deck
+    name a handful of bytes under that cap already produces a valid
+    `{name}.md` target filename, but decorating it with a leading dot and a
+    `.tmp{pid}` suffix, as the old scheme did, pushes the *temp* file's name
+    past the same limit even though the real target name it's about to
+    replace would have fit -- so `add`/`remove`/`edit` failed with a raw
+    `OSError: [Errno 36] File name too long` on a deck name that was
+    otherwise perfectly valid and that nothing anywhere else in this CLI
+    ever rejected or warned about (confirmed directly: a 251-character deck
+    name produces a 254-byte `{name}.md` target, comfortably under 255, but
+    the old temp name -- ".{name}.md.tmp{pid}" -- came to 266 bytes and
+    failed outright). Hashing `target.name` down to a fixed 16 hex
+    characters keeps the temp filename's length constant regardless of how
+    long the real target name is, so this can never itself be the reason a
+    write fails. The hash only needs to disambiguate *this* target from
+    every other file concurrently being written in the same directory (two
+    different decks, each locked and written independently, can genuinely
+    race here -- see `_deck_lock`) -- it doesn't need to be reversible or
+    collision-proof against deliberate attack, just stable and short, so a
+    truncated `sha1` is enough. `os.getpid()` is kept alongside it, exactly
+    as before, so two different *processes* racing the unlikely case of an
+    identical target name (impossible within one directory, since filenames
+    are unique there, but the hash alone can't rule out an accidental
+    collision with an unrelated file some other tool dropped nearby) still
+    don't share a temp file.
     """
     if path.is_symlink():
         try:
@@ -390,7 +421,8 @@ def _atomic_write_text(path: Path, data: str) -> None:
             raise OSError(f"{path} is a symlink loop -- can't resolve it to a real file") from exc
     else:
         target = path
-    tmp_path = target.with_name(f".{target.name}.tmp{os.getpid()}")
+    name_hash = hashlib.sha1(target.name.encode("utf-8")).hexdigest()[:16]
+    tmp_path = target.with_name(f".flashback-tmp-{name_hash}-{os.getpid()}")
     try:
         tmp_path.write_text(data, encoding="utf-8")
         os.replace(tmp_path, target)
