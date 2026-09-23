@@ -1241,6 +1241,27 @@ class TestRemoveCommand(unittest.TestCase):
         cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
         self.assertEqual([c.question for c in cards], ["bad"])
 
+    def test_removes_unrelated_card_despite_a_structurally_malformed_block_hand_edited_into_the_deck(self):
+        # Same shape as the poisoned-content test above, but the hand-edited
+        # addition isn't just poisoned content -- it's not structurally a
+        # valid card at all (no 'A:' line). This used to raise unconditionally
+        # from _parse_card regardless of validate=False, blocking `remove`
+        # from touching any other, unrelated card in the same deck.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        deck_path = self.decks_dir / "spanish.md"
+        deck_path.write_text(
+            deck_path.read_text(encoding="utf-8")
+            + "\n---\n\nQ: bad block with no answer\njust some stray text\n",
+            encoding="utf-8",
+        )
+
+        rc = self.run_flashback("remove", "spanish", "-q", "hello?")
+        self.assertEqual(rc, 0)
+
+        cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].raw, "Q: bad block with no answer\njust some stray text")
+
     def test_non_utf8_deck_file_fails_cleanly_instead_of_a_raw_traceback(self):
         # Same reasoning as add's equivalent test: `remove` reads the
         # specific deck file it was told to touch with a plain
@@ -1671,6 +1692,28 @@ class TestEditCommand(unittest.TestCase):
 
         cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
         self.assertEqual(cards[0].answer, "hola!")
+
+    def test_edits_unrelated_card_despite_a_structurally_malformed_block_hand_edited_into_the_deck(self):
+        # Same shape as the poisoned-content test above, but the hand-edited
+        # addition isn't just poisoned content -- it's not structurally a
+        # valid card at all (no 'A:' line). This used to raise unconditionally
+        # from _parse_card regardless of validate=False, blocking cmd_edit's
+        # own preview lookup (and parser.edit_card below it) from ever
+        # reaching the real, unrelated target card.
+        self.run_flashback("add", "spanish", "-q", "hello?", "-a", "hola")
+        deck_path = self.decks_dir / "spanish.md"
+        deck_path.write_text(
+            deck_path.read_text(encoding="utf-8")
+            + "\n---\n\nQ: bad block with no answer\njust some stray text\n",
+            encoding="utf-8",
+        )
+
+        rc = self.run_flashback("edit", "spanish", "-q", "hello?", "--new-answer", "hola!")
+        self.assertEqual(rc, 0)
+
+        cards = parse_deck(deck_path.read_text(encoding="utf-8"), validate=False)
+        self.assertEqual(cards[0].answer, "hola!")
+        self.assertEqual(cards[1].raw, "Q: bad block with no answer\njust some stray text")
 
     def test_interactive_preview_refuses_to_print_the_matched_cards_own_poisoned_text(self):
         # The previous test confirms an *unrelated* poisoned card doesn't

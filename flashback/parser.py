@@ -130,6 +130,15 @@ def normalize_question(question: str) -> str:
 class Card:
     question: str
     answer: str
+    # Set only for a block that failed to parse structurally (see parse_deck's
+    # `validate=False` handling below). `question`/`answer` are left as empty
+    # strings on a card like this -- never a real card's values, since both
+    # `_parse_card` and `append_card`/`edit_card` already refuse to store an
+    # empty question or answer -- and `raw` holds the block's original text
+    # verbatim, so a caller that doesn't specifically look for `raw is not
+    # None` still round-trips it unchanged through `_render_deck` instead of
+    # silently dropping it.
+    raw: Optional[str] = None
 
 
 class ParseError(ValueError):
@@ -164,6 +173,31 @@ def parse_deck(text: str, *, validate: bool = True) -> list[Card]:
     other real read of a deck file's content should keep the default
     `validate=True`, which still refuses to load a deck with a real
     duplicate anywhere in it, exactly as before.
+
+    `validate=False` also tolerates a block that fails to parse *structurally*
+    (a missing 'A:' line, a stray second 'Q:', text before the first 'Q:',
+    etc. -- see `_parse_card`) -- not just a block that parses fine but has
+    poisoned *content* (`_check_card_text`'s job) or collides on a duplicate
+    question. This is the identical "one poisoned card blocks every other,
+    unrelated card" failure shape described above, just one level earlier:
+    without this, a single hand-edited typo that breaks one card's structure
+    (forgetting the 'A:' line, say) used to make `_parse_card` raise
+    unconditionally -- before `validate` ever got a chance to matter --
+    locking `add`/`remove`/`edit` out of touching *any* other card in that
+    deck too, since all three call this function first to locate their
+    target. Such a block is kept as an opaque `Card(question="", answer="",
+    raw=<original block text>)`: `question`/`answer` are left empty (never a
+    real card's values, so this can never accidentally match a real lookup --
+    see `remove_card`/`edit_card`, which explicitly skip `raw is not None`
+    cards) and `raw` carries the block's exact original text so
+    `_render_deck` still writes it back byte-for-byte on the next
+    `remove`/`edit` of some other card, rather than either blocking that
+    unrelated operation entirely or (worse) silently dropping the malformed
+    block's content from the file. `sync` (and any other real read of a
+    deck's content) keeps the default `validate=True`, which still refuses to
+    load a deck with a structurally broken block anywhere in it, exactly as
+    before -- this tolerance is purely for the "just locating a different
+    card" callers.
     """
     cards = []
     seen_questions = set()
@@ -171,7 +205,13 @@ def parse_deck(text: str, *, validate: bool = True) -> list[Card]:
         block = block.strip()
         if not block:
             continue
-        card = _parse_card(block)
+        try:
+            card = _parse_card(block)
+        except ParseError:
+            if validate:
+                raise
+            cards.append(Card(question="", answer="", raw=block))
+            continue
         if validate and card.question in seen_questions:
             raise ParseError(
                 f"duplicate question in this deck: {card.question!r} -- "
@@ -549,10 +589,16 @@ def _render_deck(cards: list[Card]) -> str:
     through the file once, so re-checking them here would only serve to block
     the operation on some other, unrelated poisoned card (see `parse_deck`'s
     `validate` parameter).
+
+    A card with `raw` set (see `Card` and `parse_deck`'s `validate=False`
+    handling) is a block that failed to parse structurally -- there's no
+    `question`/`answer` to reformat, so its original text is written back
+    verbatim instead, unchanged from what was on disk before this call.
     """
     text = ""
     for card in cards:
-        text = _append_block(text, _format_card(card.question, card.answer))
+        block = card.raw if card.raw is not None else _format_card(card.question, card.answer)
+        text = _append_block(text, block)
     return text
 
 
@@ -579,7 +625,13 @@ def append_card(existing_text: str, question: str, answer: str) -> str:
     _check_card_text(question, answer)
 
     existing_cards = parse_deck(existing_text, validate=False)
-    if any(card.question == question for card in existing_cards):
+    # `card.raw is None`: a card with `raw` set is an opaque, unparsed block
+    # (see parse_deck's `validate=False` handling) whose placeholder
+    # `question` is always `""`, never a real question -- excluded here on
+    # principle, same as remove_card/edit_card's own lookups, even though
+    # `question` above is already known non-empty by this point so it could
+    # never accidentally equal one anyway.
+    if any(card.raw is None and card.question == question for card in existing_cards):
         raise ParseError(
             f"a card with this question already exists in this deck: {question!r}"
         )
@@ -613,11 +665,20 @@ def remove_card(existing_text: str, question: str) -> str:
     until the file is fixed by hand, rather than guessing which one to keep.
 
     Parses with `validate=False`: removing one card shouldn't be blocked by
-    some other, unrelated card in the same deck failing `_check_card_text`.
+    some other, unrelated card in the same deck failing `_check_card_text` --
+    or, per that same call's handling of a block that fails to parse at all,
+    by some other, unrelated block that isn't even structurally a valid card.
+
+    `card.raw is None` below excludes exactly those opaque, unparsed blocks
+    from matching: their placeholder `question` is always `""`, which could
+    otherwise wrongly "match" a caller-supplied `-q ''` and remove an
+    unrelated malformed block instead of reporting "no card with that
+    question found", the honest answer for an empty question that -- like
+    every other empty question -- no real card can ever actually have.
     """
     question = normalize_question(question.strip())
     cards = parse_deck(existing_text, validate=False)
-    matches = [card for card in cards if card.question == question]
+    matches = [card for card in cards if card.raw is None and card.question == question]
     if not matches:
         raise ParseError(f"no card with that question found: {question!r}")
     if len(matches) > 1:
@@ -672,6 +733,15 @@ def edit_card(
     can't catch that case, since it only compares the new question against
     cards whose *original* question differs from the one being searched for,
     which every duplicate here fails by construction.
+
+    `card.raw is None` guards both this function's lookup and its new-
+    question-collision check below, for the identical reason `remove_card`'s
+    own lookup does: a block that failed to parse structurally (see
+    `parse_deck`'s `validate=False` handling) is kept as an opaque card with
+    a placeholder `question` of `""`, which must never be treated as a real
+    match -- neither for `-q ''` locating it by accident, nor for a new
+    question that happens to be empty (already rejected just below on its
+    own, before the collision check ever runs).
     """
     if new_question is None and new_answer is None:
         raise ParseError("must provide a new question and/or a new answer to edit")
@@ -679,7 +749,7 @@ def edit_card(
     question = normalize_question(question.strip())
     cards = parse_deck(existing_text, validate=False)
 
-    matches = [card for card in cards if card.question == question]
+    matches = [card for card in cards if card.raw is None and card.question == question]
     if not matches:
         raise ParseError(f"no card with that question found: {question!r}")
     if len(matches) > 1:
@@ -699,7 +769,7 @@ def edit_card(
             if not a:
                 raise ParseError("answer cannot be empty")
             _check_card_text(q, a)
-            if any(other.question == q for other in cards if other.question != question):
+            if any(other.raw is None and other.question == q for other in cards if other.question != question):
                 raise ParseError(
                     f"a card with this question already exists in this deck: {q!r}"
                 )

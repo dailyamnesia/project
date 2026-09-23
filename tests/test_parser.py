@@ -591,6 +591,30 @@ class TestRemoveCard(unittest.TestCase):
             [("a", "1"), ("b", "2"), ("b", "3")],
         )
 
+    def test_removes_unrelated_card_despite_a_structurally_malformed_block_in_the_deck(self):
+        # Same "one poisoned card blocks every other, unrelated card" shape
+        # as the control-character and duplicate-pair tests above, but for a
+        # block that isn't even structurally a valid card (no 'A:' line
+        # here) -- previously _parse_card raised unconditionally for this,
+        # regardless of validate=False, since parse_deck only guarded the
+        # duplicate check and _check_card_text with that flag, not the call
+        # to _parse_card itself.
+        text = "Q: a\nA: 1\n---\nQ: bad block with no answer\njust some stray text\n"
+        result = remove_card(text, "a")
+        cards = parse_deck(result, validate=False)
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].question, "")
+        self.assertEqual(cards[0].raw, "Q: bad block with no answer\njust some stray text")
+
+    def test_malformed_blocks_placeholder_question_never_matches_a_real_lookup(self):
+        # A malformed block is kept with a placeholder question of "" (see
+        # parse_deck's validate=False handling) so it round-trips through
+        # _render_deck instead of being silently dropped -- but "" must never
+        # be treated as a real, matchable question, e.g. via `-q ''`.
+        text = "Q: a\nA: 1\n---\nQ: bad block with no answer\njust some stray text\n"
+        with self.assertRaises(ParseError):
+            remove_card(text, "")
+
 
 class TestEditCard(unittest.TestCase):
     def test_edits_answer_only_and_keeps_position(self):
@@ -685,6 +709,18 @@ class TestEditCard(unittest.TestCase):
         cards = parse_deck(result, validate=False)
         self.assertEqual(cards[0], Card(question="a", answer="one"))
         self.assertEqual(cards[1], Card(question="bad", answer="bell\x07here"))
+
+    def test_edits_unrelated_card_despite_a_structurally_malformed_block_in_the_deck(self):
+        # Same shape as remove_card's equivalent test: a block that isn't
+        # even structurally a valid card (no 'A:' line) elsewhere in the deck
+        # shouldn't block editing a different, unrelated card either --
+        # previously _parse_card raised unconditionally for this, regardless
+        # of validate=False.
+        text = "Q: a\nA: 1\n---\nQ: bad block with no answer\njust some stray text\n"
+        result = edit_card(text, "a", new_answer="one")
+        cards = parse_deck(result, validate=False)
+        self.assertEqual(cards[0], Card(question="a", answer="one"))
+        self.assertEqual(cards[1].raw, "Q: bad block with no answer\njust some stray text")
 
     def test_new_content_is_still_validated_despite_a_poisoned_card_elsewhere(self):
         # The validate=False parse used to locate the target card must not

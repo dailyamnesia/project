@@ -1044,10 +1044,15 @@ def cmd_edit(args):
         preview_text = _read_deck_text(deck_path)
         # validate=False: this is just a lookup to show the card's current
         # text before prompting — it shouldn't be blocked by some other,
-        # unrelated card in the same deck failing _check_card_text.
-        # edit_card() below still validates whatever new text is actually
-        # written.
-        matches = [c for c in parse_deck(preview_text, validate=False) if c.question == question]
+        # unrelated card (or unrelated structurally-malformed block, see
+        # parser.parse_deck's validate=False handling) in the same deck
+        # failing _check_card_text. edit_card() below still validates
+        # whatever new text is actually written.
+        #
+        # c.raw is None: skip opaque, unparsed blocks -- their placeholder
+        # question is always "", which must never match a real lookup here
+        # either, same as edit_card()'s own matching below.
+        matches = [c for c in parse_deck(preview_text, validate=False) if c.raw is None and c.question == question]
     except ParseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
