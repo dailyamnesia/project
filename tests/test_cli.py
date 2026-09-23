@@ -184,6 +184,47 @@ class TestAddCommand(unittest.TestCase):
         self.assertIn("error:", err.getvalue())
         self.assertIn("symlink loop", err.getvalue().lower())
 
+    @unittest.skipIf(os.name == "nt", "hard-linked deck files aren't exercised on Windows")
+    def test_add_to_hard_linked_deck_file_fails_cleanly_instead_of_silently_severing_it(self):
+        # A deck file can also be *hard*-linked, not just symlinked (the two
+        # preceding tests) -- e.g. `ln` (no `-s`) instead of `ln -s`, used to
+        # share one deck file's content under two different `--decks-dir`s
+        # without an actual symlink's indirection. A hard link isn't a
+        # symlink at all -- `path.is_symlink()` is false for one, and
+        # there's no target to `resolve()` -- so it's invisible to both of
+        # `_atomic_write_text`'s existing symlink checks, but the underlying
+        # danger is identical: `os.replace(tmp_path, target)` only ever
+        # replaces `target`'s *own* directory entry. A hard link has no
+        # privileged "real" name to redirect that replace toward the way a
+        # symlink does -- every hard-linked name is equally "the file" --
+        # so writing through one used to silently sever it from every other
+        # name pointing at the same content: this name moves on to the new
+        # content, every other name is left holding the old content forever,
+        # with no warning and a normal "added" success message printed
+        # regardless.
+        real_dir = Path(self._tmp.name) / "shared"
+        real_dir.mkdir()
+        real_path = real_dir / "spanish-real.md"
+        real_path.write_text("Q: hello?\nA: hola\n", encoding="utf-8")
+
+        self.decks_dir.mkdir(parents=True, exist_ok=True)
+        link_path = self.decks_dir / "spanish.md"
+        os.link(real_path, link_path)
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = self.run_flashback("add", "spanish", "-q", "goodbye?", "-a", "adios")
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err.getvalue())
+        self.assertIn("hard link", err.getvalue().lower())
+
+        # Refused before ever writing anything: the two names are still one
+        # file (same inode), holding only the original card -- not silently
+        # split into two diverging files.
+        self.assertEqual(link_path.stat().st_ino, real_path.stat().st_ino)
+        cards = parse_deck(real_path.read_text(encoding="utf-8"))
+        self.assertEqual([c.question for c in cards], ["hello?"])
+
     def test_empty_question_fails_without_touching_file(self):
         rc = self.run_flashback("add", "spanish", "-q", "   ", "-a", "hola")
         self.assertEqual(rc, 1)
@@ -875,6 +916,71 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(errors, [])
         cards = parse_deck(shared.read_text(encoding="utf-8"))
         self.assertEqual({c.question for c in cards}, {f"q{i}?" for i in range(8)})
+
+    @unittest.skipIf(os.name == "nt", "hard-linked deck files aren't exercised on Windows")
+    def test_concurrent_adds_via_hard_linked_decks_sharing_one_real_file_do_not_lose_cards(self):
+        # Same setup as test_concurrent_adds_via_symlinked_decks_sharing_one_real_file_do_not_lose_cards
+        # just above, but with a hard link (`os.link`) instead of a symlink
+        # for each personal --decks-dir's "spanish.md". A hard link has no
+        # privileged "real" name for _atomic_write_text's os.replace to
+        # redirect toward the way a symlink does -- every one of the 8
+        # linked names is equally "the file" -- so, before the hard-link
+        # check in _atomic_write_text, each worker's `add` silently split
+        # its own hard-linked name off into an independent file holding
+        # only that one worker's card, leaving `shared` (the name none of
+        # the workers ever writes through directly) with zero of the 8 new
+        # cards -- an even more complete loss than the symlink race above,
+        # which only lost the *losing* concurrent writer's card. With the
+        # hard-link check in place, every worker instead fails cleanly
+        # (rc=1, "hard link" in its own error) and `shared`'s content is
+        # left exactly as it started.
+        shared = Path(self._tmp.name) / "shared-spanish.md"
+        shared.write_text("", encoding="utf-8")
+        decks_dirs = []
+        for i in range(8):
+            d = Path(self._tmp.name) / f"decks-{i}"
+            d.mkdir()
+            os.link(shared, d / "spanish.md")
+            decks_dirs.append(d)
+
+        barrier = threading.Barrier(8)
+        errors = []
+        return_codes = []
+
+        def worker(i):
+            state_dir = Path(self._tmp.name) / f"state-{i}"
+            barrier.wait()
+            try:
+                rc = main(
+                    [
+                        "--decks-dir",
+                        str(decks_dirs[i]),
+                        "--state-dir",
+                        str(state_dir),
+                        "add",
+                        "spanish",
+                        "-q",
+                        f"q{i}?",
+                        "-a",
+                        f"a{i}",
+                    ]
+                )
+                return_codes.append(rc)
+            except Exception as exc:  # noqa: BLE001 - recording, not swallowing
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(return_codes, [1] * 8)
+        cards = parse_deck(shared.read_text(encoding="utf-8"))
+        self.assertEqual(cards, [])
+        for i in range(8):
+            self.assertEqual((decks_dirs[i] / "spanish.md").stat().st_ino, shared.stat().st_ino)
 
     @unittest.skipIf(os.name == "nt", "the lock this guards against is POSIX-only (fcntl)")
     def test_concurrent_adds_survive_the_deck_file_being_renamed_to_its_nfd_form_mid_race(self):

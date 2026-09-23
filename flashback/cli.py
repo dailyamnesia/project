@@ -383,6 +383,28 @@ def _atomic_write_text(path: Path, data: str) -> None:
     re-raising as `OSError`, a symlink-loop deck file crashed with a raw
     traceback exposing local paths instead.
 
+    `target`'s hard-link count is checked too, and rejected outright if it's
+    more than 1: a hard link is a second, independent directory entry --
+    possibly in a different `--decks-dir` entirely -- pointing at the exact
+    same underlying file, invisible to both `is_symlink()`/`resolve()` above
+    (a hard link isn't a symlink; there's no indirection to see or follow).
+    `os.replace(tmp_path, target)` below replaces `target`'s own directory
+    entry only -- it can't, and doesn't, update every other name that
+    happens to point at the same file, since nothing about a hard link
+    records what those other names even are. Writing through one
+    hard-linked name therefore silently severs it from the others, the
+    identical silently-diverges failure the symlink handling above exists
+    to prevent, just via a filesystem mechanism `resolve()` can't collapse
+    back down to one identity. Confirmed directly: 8 concurrent `add`s, one
+    per personal `--decks-dir`, each *hard*-linking (not symlinking) the
+    same shared deck file, left the shared file with zero of the 8 new
+    cards -- every one of the 8 hard-linked names silently split off into
+    its own independent file holding only that single `add`'s card, every
+    worker still printing a normal "added" message and exiting 0. Checked
+    only when `target` already exists, matching the symlink check above --
+    a brand new deck file being created by `add` has nothing to collide
+    with yet.
+
     The temp file's name is built from a fixed-length hash of `target.name`,
     not `target.name` itself (an earlier version of this function used
     `f".{target.name}.tmp{os.getpid()}"` directly): nothing in `add`/
@@ -421,6 +443,14 @@ def _atomic_write_text(path: Path, data: str) -> None:
             raise OSError(f"{path} is a symlink loop -- can't resolve it to a real file") from exc
     else:
         target = path
+    if target.exists() and target.stat().st_nlink > 1:
+        raise OSError(
+            f"{target} has other hard links pointing at the same file -- refusing to write "
+            "it in place, since replacing this directory entry would silently sever the "
+            "link, leaving whatever else points at it holding the old content forever while "
+            "this name moves on; remove the extra hard link(s) (e.g. keep a real copy "
+            "instead) before using flashback on it"
+        )
     name_hash = hashlib.sha1(target.name.encode("utf-8")).hexdigest()[:16]
     tmp_path = target.with_name(f".flashback-tmp-{name_hash}-{os.getpid()}")
     try:
