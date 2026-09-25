@@ -179,6 +179,17 @@ class TestParser(unittest.TestCase):
         self.assertNotIn("​", str(ctx.exception))
         self.assertIn("\\u200b", str(ctx.exception))
 
+    def test_missing_separator_error_escapes_word_joiner_in_block_context(self):
+        # Same gap, for U+2060 (word joiner, see WORD_JOINER): invisible in
+        # every renderer, with no legitimate joining/shaping role, so an
+        # unescaped one in this block dump is pure, silent noise riding
+        # along with no visible trace.
+        text = "Q: first\nA: first answer\nQ: bad⁠line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("⁠", str(ctx.exception))
+        self.assertIn("\\u2060", str(ctx.exception))
+
     def test_missing_separator_error_keeps_ordinary_block_context_readable(self):
         # The escaping above must be narrowly scoped to the two
         # terminal-manipulating classes -- real newlines and ordinary
@@ -480,6 +491,27 @@ class TestAppendCard(unittest.TestCase):
     def test_answer_with_zero_width_space_raises(self):
         with self.assertRaises(ParseError):
             append_card("", "question", f"answer{chr(0x200B)}")
+
+    def test_question_with_word_joiner_raises(self):
+        # U+2060 (WORD JOINER) is category Cf, same as the Tags-block,
+        # byte-order-mark, and zero-width-space characters above, so none of
+        # the Cc/bidi/line-separator checks catch it -- and it's invisible in
+        # every renderer, with no legitimate joining/shaping role the way
+        # ZWJ/ZWNJ have. Unlike those other three, it isn't even a
+        # copy-paste accident to guard against: it's Unicode's own current,
+        # explicitly-recommended replacement for using the byte-order mark
+        # as an invisible line-break hint, so a question built the way
+        # Unicode itself now recommends carries the identical risk. Left
+        # unchecked, a question with one spliced in prints identically to
+        # the same question without it, yet compares unequal as text -- so
+        # remove/edit exact-match lookups would fail to find a card that's
+        # genuinely right there.
+        with self.assertRaises(ParseError):
+            append_card("", f"question{chr(0x2060)}", "answer")
+
+    def test_answer_with_word_joiner_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "question", f"answer{chr(0x2060)}")
 
     def test_hand_edited_line_separator_would_silently_change_the_question_on_reparse(self):
         # Demonstrates the actual failure this check exists to prevent:

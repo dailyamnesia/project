@@ -641,6 +641,17 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_word_joiner_is_rejected(self):
+        # U+2060 (WORD JOINER) is invisible in every renderer, the same
+        # "looks the same, isn't" risk already blocked above for the Tags
+        # block, the byte-order mark, and zero-width space -- but unlike
+        # those three, it isn't even a copy-paste accident to guard against:
+        # it's Unicode's own current, explicitly-recommended replacement for
+        # using the byte-order mark as an invisible line-break hint.
+        rc = self.run_flashback("add", f"evil{chr(0x2060)}deck", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_unpaired_surrogate_is_rejected_without_writing_file(self):
         # Same failure shape as the deck-name case above, just for card text:
         # caught here as a clean ParseError instead of crashing later in
@@ -2797,11 +2808,11 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
     literal in cli.py/parser.py that isn't a docstring (comments and
     docstrings are never printed, so non-ASCII prose there is harmless) and
     fails if any contains a character outside ASCII. parser.LINE_SEPARATOR_CHARS,
-    parser.ZERO_WIDTH_NO_BREAK_SPACE, and parser.ZERO_WIDTH_SPACE are the
-    deliberate exceptions: all four characters (U+2028/U+2029/U+FEFF/U+200B)
-    are data being matched against, not text ever printed to a terminal --
-    every message that reports one names it by its ASCII "U+FEFF"/"U+2028"
-    form instead.
+    parser.ZERO_WIDTH_NO_BREAK_SPACE, parser.ZERO_WIDTH_SPACE, and
+    parser.WORD_JOINER are the deliberate exceptions: all five characters
+    (U+2028/U+2029/U+FEFF/U+200B/U+2060) are data being matched against, not
+    text ever printed to a terminal -- every message that reports one names
+    it by its ASCII "U+FEFF"/"U+2028" form instead.
     """
 
     FLASHBACK_DIR = Path(__file__).resolve().parent.parent / "flashback"
@@ -2824,7 +2835,7 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
         return ids
 
     def test_no_non_ascii_characters_in_printed_message_literals(self):
-        comparison_data_chars = {"\u2028", "\u2029", "\ufeff", "\u200b"}
+        comparison_data_chars = {"\u2028", "\u2029", "\ufeff", "\u200b", "\u2060"}
         offenders = []
         for filename in ("cli.py", "parser.py"):
             path = self.FLASHBACK_DIR / filename
@@ -3680,6 +3691,32 @@ class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertIn("zero-width space", buf.getvalue())
+
+    def test_decks_dir_with_word_joiner_is_rejected_before_writing_the_card(self):
+        # U+2060 (word joiner) is invisible everywhere, the same "looks the
+        # same, isn't" risk already blocked above for the byte-order mark
+        # and zero-width space -- but _invalid_dir_arg was never given the
+        # same check for it either.
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0x2060)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+
+        rc = main(
+            ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_decks_dir_error_message_names_the_word_joiner(self):
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0x2060)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            rc = main(["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("word joiner", buf.getvalue())
 
 
 @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo is POSIX-only, like the rest of this project's locking")

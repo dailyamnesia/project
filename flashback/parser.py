@@ -96,6 +96,26 @@ ZERO_WIDTH_NO_BREAK_SPACE = "﻿"
 # question found" for a card that's genuinely sitting right there.
 ZERO_WIDTH_SPACE = "​"
 
+# U+2060, WORD JOINER. Also category Cf, also invisible in every modern
+# renderer -- and, unlike the four characters above, it isn't even a
+# copy-paste accident: it's Unicode's own current, explicitly-recommended
+# replacement for using U+FEFF as an invisible "keep these two things
+# together, don't break a line here" hint, precisely because U+FEFF's other
+# job (the byte-order mark) makes it ambiguous everywhere except position
+# zero of a file -- see the Unicode FAQ on this exact point. So a deck built
+# by pasting from a source that follows that recommendation (or a script
+# that does the same) carries the identical risk U+FEFF/U+200B were already
+# rejected to close, just via the character Unicode itself now points people
+# toward instead of the one it deprecated. Like U+200B, it has no legitimate
+# role in plain card/deck text: it doesn't join or separate glyphs and isn't
+# part of any emoji or script-shaping sequence, so rejecting it costs
+# nothing. Left unchecked, it's the same "looks the same, isn't" gap: a
+# question with one spliced in prints identically to the same question
+# without it, yet compares unequal as text, so `remove`/`edit`'s exact-match
+# lookup reports "no card with that question found" for a card that's
+# genuinely sitting right there.
+WORD_JOINER = "⁠"
+
 
 def normalize_question(question: str) -> str:
     """Normalize a question to NFC so it compares equal regardless of how its
@@ -255,17 +275,19 @@ def _sanitize_block_for_display(block: str) -> str:
     break, injecting a phantom extra line into the very "real multi-line
     context" this verbatim dump exists to show faithfully), a Unicode Tags-
     block character (invisible in every font -- the "ASCII smuggling"
-    mechanism), the U+FEFF byte-order-mark, and U+200B zero-width space
-    (both invisible copy-paste artifacts) -- can still reach here,
-    unvalidated, on the very same malformed block that's about to be
-    rejected instead of stored. An earlier version of this function escaped
-    only the first two of these (control characters and bidi overrides,
-    the two classes _check_card_text had when this function was first
-    written) and was never updated as _check_card_text grew the other four
-    checks, leaving this block-dump side door as the one place any of them
-    could still reach a terminal raw. This escapes all six classes, leaving
-    real newlines, tabs, and ordinary printable text (including non-ASCII)
-    untouched, preserving the readability the verbatim block exists for.
+    mechanism), the U+FEFF byte-order-mark, U+200B zero-width space (both
+    invisible copy-paste artifacts), and U+2060 word joiner (Unicode's own
+    recommended replacement for using the byte-order-mark as an invisible
+    line-break hint, see WORD_JOINER) -- can still reach here, unvalidated,
+    on the very same malformed block that's about to be rejected instead of
+    stored. An earlier version of this function escaped only the first two
+    of these (control characters and bidi overrides, the two classes
+    _check_card_text had when this function was first written) and was
+    never updated as _check_card_text grew the other classes, leaving this
+    block-dump side door as the one place any of them could still reach a
+    terminal raw. This escapes all seven classes, leaving real newlines,
+    tabs, and ordinary printable text (including non-ASCII) untouched,
+    preserving the readability the verbatim block exists for.
     """
     def _needs_escaping(ch: str) -> bool:
         if ch in ("\n", "\t"):
@@ -277,6 +299,7 @@ def _sanitize_block_for_display(block: str) -> str:
             or _is_unicode_tag_char(ch)
             or ch == ZERO_WIDTH_NO_BREAK_SPACE
             or ch == ZERO_WIDTH_SPACE
+            or ch == WORD_JOINER
         )
 
     return "".join(
@@ -505,6 +528,19 @@ def _check_card_text(question: str, answer: str) -> None:
     artifact from web pages that use it as an invisible wrap hint) reads on
     screen exactly like the same question without it, yet compares unequal
     as text.
+
+    An eighth case: U+2060, WORD JOINER (see WORD_JOINER). Also category Cf,
+    so none of the checks above catch it either, and -- like U+200B just
+    above -- it has no legitimate role in plain card/deck text: it doesn't
+    join or separate glyphs and isn't part of any emoji or script-shaping
+    sequence. Unlike the other invisible characters here, it isn't even a
+    copy-paste accident to worry about defensively: it's Unicode's own
+    current, explicitly-recommended replacement for using U+FEFF as an
+    invisible "don't break a line here" hint, precisely because U+FEFF's
+    other job (the byte-order mark) makes it ambiguous everywhere outside
+    position zero of a file. So the identical "looks the same, isn't" gap
+    U+FEFF and U+200B are already rejected to close is just as reachable
+    through the character Unicode itself now points people toward instead.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -566,6 +602,12 @@ def _check_card_text(question: str, answer: str) -> None:
                 raise ParseError(
                     f"{field_name} contains a zero-width space (U+200B), which is invisible "
                     "and would make this look identical to the same text without it -- not "
+                    "allowed in card text"
+                )
+            if ch == WORD_JOINER:
+                raise ParseError(
+                    f"{field_name} contains a word joiner (U+2060), which is invisible and "
+                    "would make this look identical to the same text without it -- not "
                     "allowed in card text"
                 )
 

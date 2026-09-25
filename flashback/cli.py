@@ -16,6 +16,7 @@ from . import __version__
 from .parser import (
     BIDI_FORMATTING_CLASSES,
     LINE_SEPARATOR_CHARS,
+    WORD_JOINER,
     ZERO_WIDTH_NO_BREAK_SPACE,
     ZERO_WIDTH_SPACE,
     ParseError,
@@ -180,6 +181,15 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     every renderer, so a deck name with one spliced in (a common copy-paste
     artifact from web pages that use it as an invisible wrap hint) reads
     identically to the same name without it, while comparing unequal to it.
+
+    U+2060 (`WORD_JOINER` in `parser.py`) gets the same rejection for the
+    same reason -- invisible in every renderer, no legitimate joining/
+    shaping role in plain text -- and it isn't even a copy-paste accident to
+    guard against defensively: it's Unicode's own current, explicitly-
+    recommended replacement for using U+FEFF as an invisible line-break
+    hint, so a deck name built the way Unicode itself now recommends carries
+    the identical "looks the same, isn't" risk the U+FEFF check just above
+    already exists to close.
     """
     if "/" in name or "\\" in name:
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
@@ -225,6 +235,12 @@ def _invalid_deck_name(name: str) -> Optional[str]:
         if ch == ZERO_WIDTH_SPACE:
             return (
                 f"invalid deck name: {name!r} (contains a zero-width space U+200B, "
+                "which is invisible and can make two visually-identical deck names "
+                "actually differ)"
+            )
+        if ch == WORD_JOINER:
+            return (
+                f"invalid deck name: {name!r} (contains a word joiner U+2060, "
                 "which is invisible and can make two visually-identical deck names "
                 "actually differ)"
             )
@@ -1657,6 +1673,14 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
     invisible in every renderer, with no legitimate joining/shaping role the
     way ZWJ/ZWNJ have, so a `--decks-dir`/`--state-dir` value with one
     spliced in reads identically to the same path without it.
+
+    Also missing until now: `_invalid_deck_name`'s U+2060 (word joiner,
+    `WORD_JOINER` in `parser.py`) check, for the identical reason -- and,
+    unlike the others, not even a copy-paste accident to defend against:
+    it's Unicode's own current, explicitly-recommended replacement for using
+    U+FEFF as an invisible line-break hint, so a `--decks-dir`/`--state-dir`
+    value built the way Unicode itself now recommends carries the identical
+    risk the U+FEFF check above already exists to close.
     """
     for ch in value:
         if unicodedata.category(ch) == "Cs":
@@ -1697,6 +1721,12 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
         if ch == ZERO_WIDTH_SPACE:
             return (
                 f"invalid {flag}: {value!r} (contains a zero-width space U+200B, "
+                "which is invisible and can make two visually-identical paths "
+                "actually differ)"
+            )
+        if ch == WORD_JOINER:
+            return (
+                f"invalid {flag}: {value!r} (contains a word joiner U+2060, "
                 "which is invisible and can make two visually-identical paths "
                 "actually differ)"
             )
