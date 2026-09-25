@@ -16,6 +16,7 @@ from . import __version__
 from .parser import (
     BIDI_FORMATTING_CLASSES,
     LINE_SEPARATOR_CHARS,
+    NO_BREAK_SPACE,
     WORD_JOINER,
     ZERO_WIDTH_NO_BREAK_SPACE,
     ZERO_WIDTH_SPACE,
@@ -190,6 +191,19 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     hint, so a deck name built the way Unicode itself now recommends carries
     the identical "looks the same, isn't" risk the U+FEFF check just above
     already exists to close.
+
+    U+00A0 (`NO_BREAK_SPACE` in `parser.py`), the non-breaking space, gets a
+    rejection too, for a related but distinct reason: unlike every character
+    above, it isn't invisible -- it renders with the exact same glyph and
+    width as an ordinary space in every font. A leading/trailing one is
+    already handled (`_normalize_deck_name`'s own `.strip()` treats it as
+    whitespace, same as a real space), but one embedded inside a multi-word
+    deck name reads on screen exactly like the same name typed with an
+    ordinary space, yet compares unequal to it -- so a `--deck` value typed
+    to match what every listing displays would silently fail to match the
+    deck it looks identical to, the same "looks the same, isn't" failure
+    shape as every check above, just via a character that's deceptive by
+    being visible rather than by being invisible.
     """
     if "/" in name or "\\" in name:
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
@@ -243,6 +257,12 @@ def _invalid_deck_name(name: str) -> Optional[str]:
                 f"invalid deck name: {name!r} (contains a word joiner U+2060, "
                 "which is invisible and can make two visually-identical deck names "
                 "actually differ)"
+            )
+        if ch == NO_BREAK_SPACE:
+            return (
+                f"invalid deck name: {name!r} (contains a non-breaking space U+00A0, "
+                "which renders identically to an ordinary space and can make two "
+                "visually-identical deck names actually differ)"
             )
     return None
 
@@ -1681,6 +1701,14 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
     U+FEFF as an invisible line-break hint, so a `--decks-dir`/`--state-dir`
     value built the way Unicode itself now recommends carries the identical
     risk the U+FEFF check above already exists to close.
+
+    Also missing until now: `_invalid_deck_name`'s U+00A0 (non-breaking
+    space, `NO_BREAK_SPACE` in `parser.py`) check -- unlike every character
+    above, it isn't invisible, it renders with the exact same glyph and
+    width as an ordinary space in every font, so a `--decks-dir`/
+    `--state-dir` value with one embedded reads identically to the same
+    path without it in every message this module prints, while pointing at
+    a different real directory underneath.
     """
     for ch in value:
         if unicodedata.category(ch) == "Cs":
@@ -1729,6 +1757,12 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
                 f"invalid {flag}: {value!r} (contains a word joiner U+2060, "
                 "which is invisible and can make two visually-identical paths "
                 "actually differ)"
+            )
+        if ch == NO_BREAK_SPACE:
+            return (
+                f"invalid {flag}: {value!r} (contains a non-breaking space U+00A0, "
+                "which renders identically to an ordinary space and can make two "
+                "visually-identical paths actually differ)"
             )
     return None
 

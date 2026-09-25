@@ -652,6 +652,18 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_embedded_no_break_space_is_rejected(self):
+        # U+00A0 (NO-BREAK SPACE) is categorically different from the three
+        # cases just above: it isn't invisible at all, it renders with the
+        # exact same glyph and width as an ordinary space in every font, so
+        # there's no visual tell that "evil deck" (typed with a real space)
+        # and this deck name aren't the same -- yet they compare unequal, so
+        # a --deck value typed to match what every listing displays would
+        # silently fail to match the deck it looks identical to.
+        rc = self.run_flashback("add", f"evil{chr(0xA0)}deck", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_unpaired_surrogate_is_rejected_without_writing_file(self):
         # Same failure shape as the deck-name case above, just for card text:
         # caught here as a clean ParseError instead of crashing later in
@@ -2808,11 +2820,12 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
     literal in cli.py/parser.py that isn't a docstring (comments and
     docstrings are never printed, so non-ASCII prose there is harmless) and
     fails if any contains a character outside ASCII. parser.LINE_SEPARATOR_CHARS,
-    parser.ZERO_WIDTH_NO_BREAK_SPACE, parser.ZERO_WIDTH_SPACE, and
-    parser.WORD_JOINER are the deliberate exceptions: all five characters
-    (U+2028/U+2029/U+FEFF/U+200B/U+2060) are data being matched against, not
-    text ever printed to a terminal -- every message that reports one names
-    it by its ASCII "U+FEFF"/"U+2028" form instead.
+    parser.ZERO_WIDTH_NO_BREAK_SPACE, parser.ZERO_WIDTH_SPACE,
+    parser.WORD_JOINER, and parser.NO_BREAK_SPACE are the deliberate
+    exceptions: all six characters (U+2028/U+2029/U+FEFF/U+200B/U+2060/
+    U+00A0) are data being matched against, not text ever printed to a
+    terminal -- every message that reports one names it by its ASCII
+    "U+FEFF"/"U+2028"/"U+00A0" form instead.
     """
 
     FLASHBACK_DIR = Path(__file__).resolve().parent.parent / "flashback"
@@ -2835,7 +2848,7 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
         return ids
 
     def test_no_non_ascii_characters_in_printed_message_literals(self):
-        comparison_data_chars = {"\u2028", "\u2029", "\ufeff", "\u200b", "\u2060"}
+        comparison_data_chars = {"\u2028", "\u2029", "\ufeff", "\u200b", "\u2060", "\u00a0"}
         offenders = []
         for filename in ("cli.py", "parser.py"):
             path = self.FLASHBACK_DIR / filename
@@ -3717,6 +3730,35 @@ class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertIn("word joiner", buf.getvalue())
+
+    def test_decks_dir_with_embedded_no_break_space_is_rejected_before_writing_the_card(self):
+        # U+00A0 (non-breaking space) is categorically different from the
+        # characters above: it isn't invisible, it renders with the exact
+        # same glyph and width as an ordinary space in every font -- but
+        # _invalid_dir_arg was never given a check for it either, so a
+        # --decks-dir value with one embedded read identically to the same
+        # path without it in every message this module prints, while
+        # pointing at a different real directory underneath.
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0xA0)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+
+        rc = main(
+            ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_decks_dir_error_message_names_the_no_break_space(self):
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0xA0)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            rc = main(["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("non-breaking space", buf.getvalue())
 
 
 @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo is POSIX-only, like the rest of this project's locking")

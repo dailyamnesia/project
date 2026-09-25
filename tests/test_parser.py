@@ -513,6 +513,34 @@ class TestAppendCard(unittest.TestCase):
         with self.assertRaises(ParseError):
             append_card("", "question", f"answer{chr(0x2060)}")
 
+    def test_question_with_embedded_no_break_space_raises(self):
+        # U+00A0 (NO-BREAK SPACE) is categorically different from every
+        # character rejected above: it isn't invisible at all, it renders
+        # with the exact same glyph and width as an ordinary space in every
+        # font. A leading/trailing one is already handled by .strip() (see
+        # test_question_with_leading_no_break_space_is_stripped_not_rejected
+        # below), but one embedded inside the question (e.g. "Mr. Smith"
+        # pasted from a word processor or a web page's &nbsp;) reads on
+        # screen exactly like the same question typed with an ordinary
+        # space, yet compares unequal to it -- so remove/edit exact-match
+        # lookups would fail to find a card that's genuinely right there.
+        with self.assertRaises(ParseError):
+            append_card("", f"Mr.{chr(0xA0)}Smith is a teacher", "answer")
+
+    def test_answer_with_embedded_no_break_space_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "question", f"part one{chr(0xA0)}part two")
+
+    def test_question_with_leading_no_break_space_is_stripped_not_rejected(self):
+        # A leading/trailing NBSP never reaches the character-by-character
+        # check at all: normalize_question's own question.strip() already
+        # treats it as whitespace, same as a real space (str.isspace() is
+        # True for U+00A0), so this succeeds exactly like a plain leading
+        # space would rather than raising.
+        text = append_card("", f"{chr(0xA0)}question{chr(0xA0)}", "answer")
+        cards = parse_deck(text)
+        self.assertEqual(cards[0].question, "question")
+
     def test_hand_edited_line_separator_would_silently_change_the_question_on_reparse(self):
         # Demonstrates the actual failure this check exists to prevent:
         # bypass validation (the same way parse_deck's own `validate=False`

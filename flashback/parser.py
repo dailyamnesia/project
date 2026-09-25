@@ -116,6 +116,32 @@ ZERO_WIDTH_SPACE = "​"
 # genuinely sitting right there.
 WORD_JOINER = "⁠"
 
+# U+00A0, NO-BREAK SPACE. Unlike every other character rejected in this
+# module, it isn't invisible or zero-width -- it renders with the exact same
+# glyph and width as an ordinary space (U+0020) in literally every font,
+# since that's its entire defined purpose: "a space, except a line can't be
+# broken here." That makes it worse than a merely-rare copy-paste artifact
+# for this module's specific "looks the same, isn't" failure shape, since
+# there's no visual tell at all to notice, in a terminal or anywhere else. A
+# *leading or trailing* NBSP is already handled safely -- `str.isspace()`
+# (what `.strip()` uses) counts it as whitespace, so `normalize_question`'s
+# own `question.strip()` already strips one from either edge the same way it
+# strips a real space -- but one embedded *inside* a question (e.g. "Mr.
+# Smith", pasted from a word processor or a web page that uses `&nbsp;` to
+# keep a name from wrapping mid-line) survives untouched: it reads on screen
+# exactly like "Mr. Smith" typed with an ordinary space, yet compares unequal
+# to it as text, so `remove`/`edit`'s exact-match lookup reports "no card
+# with that question found" for a card that's genuinely sitting right there.
+# NFC normalization doesn't help either -- NBSP has no canonical-equivalence
+# decomposition to U+0020, only a *compatibility* one, so folding it away
+# would mean switching to NFKC, a much more aggressive normalization that
+# would also silently fold apart plenty of legitimately-distinct content
+# (ligatures, full-width characters, superscripts). Rejecting it outright,
+# the same way this module already rejects every other "looks the same,
+# isn't" character, costs nothing: nobody types a non-breaking space on
+# purpose in a plain-text flashcard.
+NO_BREAK_SPACE = " "
+
 
 def normalize_question(question: str) -> str:
     """Normalize a question to NFC so it compares equal regardless of how its
@@ -541,6 +567,18 @@ def _check_card_text(question: str, answer: str) -> None:
     position zero of a file. So the identical "looks the same, isn't" gap
     U+FEFF and U+200B are already rejected to close is just as reachable
     through the character Unicode itself now points people toward instead.
+
+    A ninth case, categorically different from the eight above: U+00A0, NO-
+    BREAK SPACE (see NO_BREAK_SPACE). Unlike every character rejected above,
+    it isn't invisible -- it renders with the exact same glyph and width as
+    an ordinary space in every font, which makes it just as deceptive for a
+    different reason: there's no visual tell at all, not even "something is
+    there that shouldn't be." A leading/trailing one is already handled --
+    `.strip()` treats it as whitespace the same as a real space -- but one
+    embedded inside a question (a common artifact of pasting from a word
+    processor or a web page's `&nbsp;`) reads on screen exactly like the
+    same question typed with an ordinary space, yet compares unequal to it,
+    the same "looks the same, isn't" consequence as every case above.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -609,6 +647,12 @@ def _check_card_text(question: str, answer: str) -> None:
                     f"{field_name} contains a word joiner (U+2060), which is invisible and "
                     "would make this look identical to the same text without it -- not "
                     "allowed in card text"
+                )
+            if ch == NO_BREAK_SPACE:
+                raise ParseError(
+                    f"{field_name} contains a non-breaking space (U+00A0), which renders "
+                    "identically to an ordinary space and would make this look identical to "
+                    "the same text typed with one -- not allowed in card text"
                 )
 
 
