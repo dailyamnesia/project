@@ -513,6 +513,25 @@ class TestAppendCard(unittest.TestCase):
         with self.assertRaises(ParseError):
             append_card("", "question", f"answer{chr(0x2060)}")
 
+    def test_question_with_invisible_math_operator_raises(self):
+        # U+2061-U+2064 (Unicode's "Invisible Mathematical Operators" block,
+        # e.g. U+2063 INVISIBLE SEPARATOR) is category Cf, same as the
+        # Tags-block, byte-order-mark, zero-width-space, and word-joiner
+        # characters above, so none of the Cc/bidi/line-separator checks
+        # catch it either -- and like the Tags block, every code point in it
+        # has no visible glyph in any conformant font, with no legitimate
+        # joining/shaping role the way ZWJ/ZWNJ have. Left unchecked, a
+        # question with one spliced in prints identically to the same
+        # question without it, yet compares unequal as text -- so
+        # remove/edit exact-match lookups would fail to find a card that's
+        # genuinely right there.
+        with self.assertRaises(ParseError):
+            append_card("", f"question{chr(0x2063)}", "answer")
+
+    def test_answer_with_invisible_math_operator_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "question", f"answer{chr(0x2063)}")
+
     def test_question_with_embedded_no_break_space_raises(self):
         # U+00A0 (NO-BREAK SPACE) is categorically different from every
         # character rejected above: it isn't invisible at all, it renders

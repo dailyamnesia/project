@@ -142,6 +142,24 @@ WORD_JOINER = "⁠"
 # purpose in a plain-text flashcard.
 NO_BREAK_SPACE = " "
 
+# U+2061-U+2064, Unicode's "Invisible Mathematical Operators" block (FUNCTION
+# APPLICATION, INVISIBLE TIMES, INVISIBLE SEPARATOR, INVISIBLE PLUS). Same
+# category (Cf) as the Tags block, so a blanket Cf rejection would still be
+# wrong for the same ZWJ/variation-selector reason -- but every code point
+# in this block, like the Tags block, has no visible glyph in any conformant
+# font, and none of them join or separate glyphs or take part in any emoji
+# or script-shaping sequence the way ZWJ/ZWNJ do. Left unchecked, the
+# identical "looks the same, isn't" gap every other check in this module
+# closes: a question with one spliced in prints identically to the same
+# question without it, yet compares unequal as text, so `remove`/`edit`'s
+# exact-match lookup reports "no card with that question found" for a card
+# that's genuinely sitting right there.
+INVISIBLE_MATH_OPERATOR_RANGE = (0x2061, 0x2064)
+
+
+def _is_invisible_math_operator(ch: str) -> bool:
+    return INVISIBLE_MATH_OPERATOR_RANGE[0] <= ord(ch) <= INVISIBLE_MATH_OPERATOR_RANGE[1]
+
 
 def normalize_question(question: str) -> str:
     """Normalize a question to NFC so it compares equal regardless of how its
@@ -579,6 +597,15 @@ def _check_card_text(question: str, answer: str) -> None:
     processor or a web page's `&nbsp;`) reads on screen exactly like the
     same question typed with an ordinary space, yet compares unequal to it,
     the same "looks the same, isn't" consequence as every case above.
+
+    A tenth case: Unicode's "Invisible Mathematical Operators" block, U+2061-
+    U+2064 (see INVISIBLE_MATH_OPERATOR_RANGE). Also category Cf, so none of
+    the checks above catch it either, and -- like the Tags block -- every
+    code point in it has no visible glyph in any conformant font, with no
+    legitimate joining/shaping role the way ZWJ/ZWNJ have. The identical
+    "looks the same, isn't" gap every check above closes: a question with
+    one spliced in reads on screen exactly like the same question without
+    it, yet compares unequal as text.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -653,6 +680,13 @@ def _check_card_text(question: str, answer: str) -> None:
                     f"{field_name} contains a non-breaking space (U+00A0), which renders "
                     "identically to an ordinary space and would make this look identical to "
                     "the same text typed with one -- not allowed in card text"
+                )
+            if _is_invisible_math_operator(ch):
+                raise ParseError(
+                    f"{field_name} contains an invisible mathematical operator (U+"
+                    f"{ord(ch):04X}), which has no visible glyph in any font and would make "
+                    "this look identical to the same text without it -- not allowed in card "
+                    "text"
                 )
 
 

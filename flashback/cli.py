@@ -22,6 +22,7 @@ from .parser import (
     ZERO_WIDTH_SPACE,
     ParseError,
     _check_card_text,
+    _is_invisible_math_operator,
     _is_unicode_tag_char,
     append_card,
     edit_card,
@@ -204,6 +205,12 @@ def _invalid_deck_name(name: str) -> Optional[str]:
     deck it looks identical to, the same "looks the same, isn't" failure
     shape as every check above, just via a character that's deceptive by
     being visible rather than by being invisible.
+
+    Unicode's "Invisible Mathematical Operators" block (U+2061-U+2064, see
+    `_is_invisible_math_operator` in `parser.py`) gets the same rejection as
+    the Tags block above, for the identical reason: no visible glyph in any
+    font, no legitimate joining/shaping role, so two deck names that read
+    identically on screen could actually differ underneath.
     """
     if "/" in name or "\\" in name:
         return f"invalid deck name: {name!r} (deck names can't contain a path separator)"
@@ -263,6 +270,12 @@ def _invalid_deck_name(name: str) -> Optional[str]:
                 f"invalid deck name: {name!r} (contains a non-breaking space U+00A0, "
                 "which renders identically to an ordinary space and can make two "
                 "visually-identical deck names actually differ)"
+            )
+        if _is_invisible_math_operator(ch):
+            return (
+                f"invalid deck name: {name!r} (contains an invisible mathematical "
+                f"operator U+{ord(ch):04X}, which has no visible glyph in any font "
+                "and can make two visually-identical deck names actually differ)"
             )
     return None
 
@@ -1709,6 +1722,14 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
     `--state-dir` value with one embedded reads identically to the same
     path without it in every message this module prints, while pointing at
     a different real directory underneath.
+
+    Also missing until now: `_invalid_deck_name`'s Unicode "Invisible
+    Mathematical Operators" block check (U+2061-U+2064, see
+    `_is_invisible_math_operator` in `parser.py`), for the identical reason
+    -- no visible glyph in any font, no legitimate joining/shaping role, so
+    a `--decks-dir`/`--state-dir` value with one embedded reads identically
+    to the same path without it while pointing at a different real
+    directory underneath.
     """
     for ch in value:
         if unicodedata.category(ch) == "Cs":
@@ -1763,6 +1784,12 @@ def _invalid_dir_arg(flag: str, value: str) -> Optional[str]:
                 f"invalid {flag}: {value!r} (contains a non-breaking space U+00A0, "
                 "which renders identically to an ordinary space and can make two "
                 "visually-identical paths actually differ)"
+            )
+        if _is_invisible_math_operator(ch):
+            return (
+                f"invalid {flag}: {value!r} (contains an invisible mathematical "
+                f"operator U+{ord(ch):04X}, which has no visible glyph in any font "
+                "and can make two visually-identical paths actually differ)"
             )
     return None
 

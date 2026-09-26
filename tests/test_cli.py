@@ -664,6 +664,17 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_invisible_math_operator_is_rejected(self):
+        # U+2061-U+2064 (Unicode's "Invisible Mathematical Operators" block,
+        # e.g. U+2063 INVISIBLE SEPARATOR) is invisible in every renderer,
+        # the same "looks the same, isn't" risk already blocked above for
+        # the Tags block, the byte-order mark, zero-width space, and word
+        # joiner -- but it isn't part of any legitimate emoji or
+        # script-shaping sequence, so rejecting it costs nothing.
+        rc = self.run_flashback("add", f"evil{chr(0x2063)}deck", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_unpaired_surrogate_is_rejected_without_writing_file(self):
         # Same failure shape as the deck-name case above, just for card text:
         # caught here as a clean ParseError instead of crashing later in
@@ -3759,6 +3770,33 @@ class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertIn("non-breaking space", buf.getvalue())
+
+    def test_decks_dir_with_invisible_math_operator_is_rejected_before_writing_the_card(self):
+        # U+2061-U+2064 (Unicode's "Invisible Mathematical Operators" block,
+        # e.g. U+2063 INVISIBLE SEPARATOR) is invisible everywhere, the same
+        # "looks the same, isn't" risk already blocked above for the
+        # byte-order mark, zero-width space, and word joiner -- but
+        # _invalid_dir_arg was never given the same check for it either.
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0x2063)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+
+        rc = main(
+            ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_decks_dir_error_message_names_the_invisible_math_operator(self):
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0x2063)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            rc = main(["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("invisible mathematical operator", buf.getvalue())
 
 
 @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo is POSIX-only, like the rest of this project's locking")
