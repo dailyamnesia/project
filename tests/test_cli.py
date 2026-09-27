@@ -675,6 +675,31 @@ class TestAddCommand(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(self.decks_dir.exists())
 
+    def test_deck_name_with_mongolian_vowel_separator_is_rejected(self):
+        # U+180E (MONGOLIAN VOWEL SEPARATOR) is category Cf, reclassified
+        # from a space to a format character in Unicode 6.3 specifically
+        # because it has no visible glyph in modern rendering -- the same
+        # "looks the same, isn't" risk already blocked above for the Tags
+        # block, the byte-order mark, zero-width space, and word joiner.
+        rc = self.run_flashback("add", f"evil{chr(0x180E)}deck", "-q", "hola?", "-a", "hello")
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.decks_dir.exists())
+
+    def test_deck_name_with_invisible_combining_mark_is_rejected(self):
+        # U+034F (COMBINING GRAPHEME JOINER), the Mongolian free variation
+        # selectors U+180B-U+180D/U+180F, and the Khmer inherent vowel signs
+        # U+17B4-U+17B5 are all category Mn, not Cf -- each exists purely to
+        # modify or separate the character next to it and has no glyph of
+        # its own standing alone, the same "looks the same, isn't" risk
+        # already blocked above via a different Unicode category.
+        for codepoint in (0x034F, 0x180B, 0x180C, 0x180D, 0x180F, 0x17B4, 0x17B5):
+            with self.subTest(codepoint=hex(codepoint)):
+                rc = self.run_flashback(
+                    "add", f"evil{chr(codepoint)}deck", "-q", "hola?", "-a", "hello"
+                )
+                self.assertEqual(rc, 1)
+                self.assertFalse(self.decks_dir.exists())
+
     def test_answer_with_unpaired_surrogate_is_rejected_without_writing_file(self):
         # Same failure shape as the deck-name case above, just for card text:
         # caught here as a clean ParseError instead of crashing later in
@@ -2832,11 +2857,15 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
     docstrings are never printed, so non-ASCII prose there is harmless) and
     fails if any contains a character outside ASCII. parser.LINE_SEPARATOR_CHARS,
     parser.ZERO_WIDTH_NO_BREAK_SPACE, parser.ZERO_WIDTH_SPACE,
-    parser.WORD_JOINER, and parser.NO_BREAK_SPACE are the deliberate
-    exceptions: all six characters (U+2028/U+2029/U+FEFF/U+200B/U+2060/
-    U+00A0) are data being matched against, not text ever printed to a
-    terminal -- every message that reports one names it by its ASCII
-    "U+FEFF"/"U+2028"/"U+00A0" form instead.
+    parser.WORD_JOINER, parser.NO_BREAK_SPACE, and
+    parser.MONGOLIAN_VOWEL_SEPARATOR are the deliberate exceptions: all
+    seven characters (U+2028/U+2029/U+FEFF/U+200B/U+2060/U+00A0/U+180E) are
+    data being matched against, not text ever printed to a terminal --
+    every message that reports one names it by its ASCII "U+FEFF"/"U+2028"/
+    "U+00A0"/"U+180E" form instead. (The invisible-math-operator and
+    invisible-combining-mark checks compare `ord(ch)` against an int
+    range/frozenset instead of a string literal, so they never reach this
+    scan at all.)
     """
 
     FLASHBACK_DIR = Path(__file__).resolve().parent.parent / "flashback"
@@ -2859,7 +2888,9 @@ class TestUserFacingMessagesAreAscii(unittest.TestCase):
         return ids
 
     def test_no_non_ascii_characters_in_printed_message_literals(self):
-        comparison_data_chars = {"\u2028", "\u2029", "\ufeff", "\u200b", "\u2060", "\u00a0"}
+        comparison_data_chars = {
+            "\u2028", "\u2029", "\ufeff", "\u200b", "\u2060", "\u00a0", "\u180e",
+        }
         offenders = []
         for filename in ("cli.py", "parser.py"):
             path = self.FLASHBACK_DIR / filename
@@ -3797,6 +3828,63 @@ class TestDirArgControlCharAndBidiValidation(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertIn("invisible mathematical operator", buf.getvalue())
+
+    def test_decks_dir_with_mongolian_vowel_separator_is_rejected_before_writing_the_card(self):
+        # U+180E (MONGOLIAN VOWEL SEPARATOR) is invisible in modern
+        # rendering, the same "looks the same, isn't" risk already blocked
+        # above for the byte-order mark, zero-width space, word joiner, and
+        # invisible math operators -- but _invalid_dir_arg was never given
+        # the same check for it either.
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0x180E)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+
+        rc = main(
+            ["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "add", "spanish", "-q", "hi", "-a", "hola"]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_decks_dir_error_message_names_the_mongolian_vowel_separator(self):
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0x180E)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            rc = main(["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("Mongolian vowel separator", buf.getvalue())
+
+    def test_decks_dir_with_invisible_combining_mark_is_rejected_before_writing_the_card(self):
+        # U+034F (COMBINING GRAPHEME JOINER), the Mongolian free variation
+        # selectors U+180B-U+180D/U+180F, and the Khmer inherent vowel signs
+        # U+17B4-U+17B5 are all category Mn, not Cf -- each has no glyph of
+        # its own standing alone, the same "looks the same, isn't" risk
+        # already blocked above via a different Unicode category.
+        for codepoint in (0x034F, 0x180B, 0x180C, 0x180D, 0x180F, 0x17B4, 0x17B5):
+            with self.subTest(codepoint=hex(codepoint)):
+                bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(codepoint)}cks")
+                state_dir = os.path.join(self._tmp.name, ".flashback")
+
+                rc = main(
+                    ["--decks-dir", bad_decks_dir, "--state-dir", state_dir,
+                     "add", "spanish", "-q", "hi", "-a", "hola"]
+                )
+
+                self.assertEqual(rc, 1)
+                self.assertFalse(os.path.exists(bad_decks_dir))
+
+    def test_decks_dir_error_message_names_the_invisible_combining_mark(self):
+        bad_decks_dir = os.path.join(self._tmp.name, f"de{chr(0x034F)}cks")
+        state_dir = os.path.join(self._tmp.name, ".flashback")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            rc = main(["--decks-dir", bad_decks_dir, "--state-dir", state_dir, "sync"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("invisible combining mark", buf.getvalue())
 
 
 @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo is POSIX-only, like the rest of this project's locking")

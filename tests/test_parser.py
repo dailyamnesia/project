@@ -532,6 +532,44 @@ class TestAppendCard(unittest.TestCase):
         with self.assertRaises(ParseError):
             append_card("", "question", f"answer{chr(0x2063)}")
 
+    def test_question_with_mongolian_vowel_separator_raises(self):
+        # U+180E (MONGOLIAN VOWEL SEPARATOR) is category Cf, same as the
+        # Tags-block/byte-order-mark/zero-width-space/word-joiner/math-
+        # operator characters above, so none of the Cc/bidi/line-separator
+        # checks catch it either -- reclassified from a space to a format
+        # character in Unicode 6.3 specifically because it has no visible
+        # glyph in modern rendering. Left unchecked, a question with one
+        # spliced in prints identically to the same question without it,
+        # yet compares unequal as text -- so remove/edit exact-match
+        # lookups would fail to find a card that's genuinely right there.
+        with self.assertRaises(ParseError):
+            append_card("", f"question{chr(0x180E)}", "answer")
+
+    def test_answer_with_mongolian_vowel_separator_raises(self):
+        with self.assertRaises(ParseError):
+            append_card("", "question", f"answer{chr(0x180E)}")
+
+    def test_question_with_invisible_combining_mark_raises(self):
+        # U+034F (COMBINING GRAPHEME JOINER), U+180B-U+180D/U+180F (the
+        # Mongolian free variation selectors), and U+17B4-U+17B5 (the Khmer
+        # inherent vowel signs) are all category Mn, not Cf, so none of the
+        # checks above catch them either -- each exists purely to modify or
+        # separate the character next to it and has no glyph of its own
+        # standing alone. Left unchecked, a question with one spliced in
+        # prints identically to the same question without it, yet compares
+        # unequal as text -- so remove/edit exact-match lookups would fail
+        # to find a card that's genuinely right there.
+        for codepoint in (0x034F, 0x180B, 0x180C, 0x180D, 0x180F, 0x17B4, 0x17B5):
+            with self.subTest(codepoint=hex(codepoint)):
+                with self.assertRaises(ParseError):
+                    append_card("", f"question{chr(codepoint)}", "answer")
+
+    def test_answer_with_invisible_combining_mark_raises(self):
+        for codepoint in (0x034F, 0x180B, 0x180C, 0x180D, 0x180F, 0x17B4, 0x17B5):
+            with self.subTest(codepoint=hex(codepoint)):
+                with self.assertRaises(ParseError):
+                    append_card("", "question", f"answer{chr(codepoint)}")
+
     def test_question_with_embedded_no_break_space_raises(self):
         # U+00A0 (NO-BREAK SPACE) is categorically different from every
         # character rejected above: it isn't invisible at all, it renders

@@ -161,6 +161,43 @@ def _is_invisible_math_operator(ch: str) -> bool:
     return INVISIBLE_MATH_OPERATOR_RANGE[0] <= ord(ch) <= INVISIBLE_MATH_OPERATOR_RANGE[1]
 
 
+# U+180E, MONGOLIAN VOWEL SEPARATOR. Category Cf, like WORD_JOINER and the
+# invisible math operators above -- but not one of the specific characters
+# either already names, so it slips past every check above unnoticed.
+# Reclassified from Zs (a space) to Cf by Unicode 6.3 specifically because
+# it has no visible glyph in modern rendering -- the identical "no
+# legitimate visible role" reasoning WORD_JOINER and the math operators
+# already got their own checks for. Left unchecked, the same "looks the
+# same, isn't" gap: a question with one spliced in reads on screen exactly
+# like the same question without it, yet compares unequal as text.
+MONGOLIAN_VOWEL_SEPARATOR = "᠎"
+
+# A cluster of marks sharing one root cause distinct from every character
+# above: each exists purely to modify or separate the character next to
+# it, and standing alone -- nothing to modify -- has no glyph of its own.
+# But each is filed under general category 'Mn' (nonspacing mark), not
+# 'Cf', so none of the checks above catch them, and a blanket Mn rejection
+# would be wrong for the same reason a blanket Cf rejection already is:
+# 'Mn' also holds ordinary diacritics that render combined with a base
+# character. U+034F COMBINING GRAPHEME JOINER (blocks otherwise-automatic
+# ligating/combining behavior between two adjacent characters -- invisible
+# with nothing to join when it appears alone); U+180B-U+180D and U+180F,
+# the Mongolian free variation selectors one through four (siblings of the
+# ordinary U+FE00-U+FE0F variation-selector block, just for a different
+# script's glyph-variant system); and U+17B4-U+17B5, the Khmer inherent
+# vowel signs (exist purely to override a consonant's own default inherent
+# vowel, invisible the same way when there's no consonant to modify). Left
+# unchecked, the identical "looks the same, isn't" gap every check above
+# closes.
+INVISIBLE_COMBINING_MARK_CODEPOINTS = frozenset(
+    {0x034F, 0x180B, 0x180C, 0x180D, 0x180F, 0x17B4, 0x17B5}
+)
+
+
+def _is_invisible_combining_mark(ch: str) -> bool:
+    return ord(ch) in INVISIBLE_COMBINING_MARK_CODEPOINTS
+
+
 def normalize_question(question: str) -> str:
     """Normalize a question to NFC so it compares equal regardless of how its
     accented/composed characters happen to be encoded.
@@ -606,6 +643,25 @@ def _check_card_text(question: str, answer: str) -> None:
     "looks the same, isn't" gap every check above closes: a question with
     one spliced in reads on screen exactly like the same question without
     it, yet compares unequal as text.
+
+    An eleventh case: U+180E, MONGOLIAN VOWEL SEPARATOR (see
+    MONGOLIAN_VOWEL_SEPARATOR). Also category Cf, so none of the checks
+    above catch it either -- reclassified from a space to a format
+    character in Unicode 6.3 specifically because it has no visible glyph
+    in modern rendering, the identical "looks the same, isn't" gap every
+    check above closes.
+
+    A twelfth case: a cluster of marks filed under category 'Mn', not 'Cf'
+    (see INVISIBLE_COMBINING_MARK_CODEPOINTS) -- U+034F COMBINING GRAPHEME
+    JOINER, the Mongolian free variation selectors U+180B-U+180D/U+180F,
+    and the Khmer inherent vowel signs U+17B4-U+17B5. Each exists purely to
+    modify or separate the character next to it and has no glyph of its
+    own standing alone, but 'Mn' also holds ordinary diacritics that render
+    combined with a base character, so (like the Cf checks above) this
+    can't be a blanket category rejection -- these specific code points are
+    named individually instead. The identical "looks the same, isn't" gap:
+    a question with one spliced in reads on screen exactly like the same
+    question without it, yet compares unequal as text.
     """
     for field_name, text in (("question", question), ("answer", answer)):
         for line in text.splitlines():
@@ -687,6 +743,18 @@ def _check_card_text(question: str, answer: str) -> None:
                     f"{ord(ch):04X}), which has no visible glyph in any font and would make "
                     "this look identical to the same text without it -- not allowed in card "
                     "text"
+                )
+            if ch == MONGOLIAN_VOWEL_SEPARATOR:
+                raise ParseError(
+                    f"{field_name} contains a Mongolian vowel separator (U+180E), which has "
+                    "no visible glyph in modern rendering and would make this look identical "
+                    "to the same text without it -- not allowed in card text"
+                )
+            if _is_invisible_combining_mark(ch):
+                raise ParseError(
+                    f"{field_name} contains an invisible combining mark (U+{ord(ch):04X}), "
+                    "which has no visible glyph on its own and would make this look identical "
+                    "to the same text without it -- not allowed in card text"
                 )
 
 
