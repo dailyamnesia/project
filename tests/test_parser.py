@@ -255,6 +255,44 @@ class TestParser(unittest.TestCase):
         self.assertNotIn("͏", str(ctx.exception))
         self.assertIn("\\u034f", str(ctx.exception))
 
+    def test_missing_separator_error_escapes_invisible_combining_mark_in_own_line_quote(self):
+        # _sanitize_block_for_display escapes the invisible combining marks
+        # (category Mn -- see INVISIBLE_COMBINING_MARK_CODEPOINTS) in the
+        # verbatim block dump these ParseErrors append (see the test just
+        # above), but the *same* message also quotes the single offending
+        # line separately, up front, via plain `{line!r}` -- and Python's own
+        # `repr()` treats a category-Mn character as printable (unlike every
+        # Cf character this module rejects, which repr() already escapes on
+        # its own), so that short, earlier quote leaked the raw invisible
+        # character even once the block dump right after it was fixed to
+        # escape it. Confirmed directly: before this fix, the message below
+        # contained the raw U+034F combining grapheme joiner in the
+        # `('Q: bad...line')` portion, even though the exact same character
+        # was correctly shown as `͏` a few characters later in the same
+        # string.
+        text = "Q: first\nA: first answer\nQ: bad͏line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("͏", str(ctx.exception))
+        self.assertIn("\\u034f", str(ctx.exception))
+
+    def test_embedded_q_prefix_line_error_escapes_invisible_combining_mark(self):
+        # _check_card_text's own "line starting with 'Q:'/'A:'" ParseError
+        # (raised for a multi-line question/answer whose *own* later line
+        # happens to start with a literal "Q:"/"A:") has no companion
+        # verbatim-block dump the way _parse_card's structural errors do --
+        # the offending line's `{line!r}` quote is the only place this
+        # message shows the bad content at all. The same Mn-category gap
+        # applies here just as directly: Python's repr() doesn't escape an
+        # invisible combining mark, so it used to reach this message (and
+        # from there, `add`/`edit`/`sync`'s stderr) completely raw, with no
+        # escaped copy anywhere in the same error to fall back on.
+        question = "real question\nQ: fake͏line"
+        with self.assertRaises(ParseError) as ctx:
+            append_card("", question, "answer")
+        self.assertNotIn("͏", str(ctx.exception))
+        self.assertIn("\\u034f", str(ctx.exception))
+
     def test_missing_separator_error_keeps_ordinary_block_context_readable(self):
         # The escaping above must be narrowly scoped to the two
         # terminal-manipulating classes -- real newlines and ordinary

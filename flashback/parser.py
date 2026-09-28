@@ -343,11 +343,18 @@ def _sanitize_block_for_display(block: str) -> str:
 
     A ParseError raised below this point (a missing '---' separator, a
     stray 'Q:'/'A:' line, text before the first 'Q:') includes the whole
-    surrounding block verbatim, unlike every other message in this module,
-    which only ever interpolates an already-`!r`-escaped single line or
-    value. That's deliberate here, for readability -- a missing separator is
-    much easier to spot with real multi-line context than with a single
-    escaped line -- but it means whatever a hand-edited deck file actually
+    surrounding block verbatim, not just the single offending line -- a
+    missing separator is much easier to spot with real multi-line context
+    than with a single escaped line. Every one of those same call sites
+    (plus `_check_card_text`'s own two raise sites) also quote the single
+    offending line up front via this same function rather than a bare
+    `{line!r}`; `repr()` alone isn't a safe substitute here since it treats
+    a category-Mn invisible combining mark as printable and leaves it
+    unescaped, unlike the Cc/Cf/Cs classes below that it does escape on its
+    own (confirmed directly: before this was applied to the single-line
+    quotes too, a raw U+034F combining grapheme joiner reached that earlier
+    quote in the same message whose later block dump correctly showed it
+    escaped). But it means whatever a hand-edited deck file actually
     contains reaches sync's `print(..., file=sys.stderr)` output raw. Every
     character class `_check_card_text` rejects from ever being *stored* in a
     card for "manipulates the terminal/display" reasons -- a control
@@ -433,8 +440,9 @@ def _parse_card(block: str) -> Card:
                 # caught here, while the prefixes are still visible.
                 raise ParseError(
                     "card has a second 'Q:' line after its answer already started "
-                    f"({line!r}) -- this looks like two cards run together because a "
-                    f"'---' separator is missing between them:\n{_sanitize_block_for_display(block)}"
+                    f"('{_sanitize_block_for_display(line)}') -- this looks like two cards run "
+                    "together because a '---' separator is missing between them:\n"
+                    f"{_sanitize_block_for_display(block)}"
                 )
             if section == "q":
                 # A second 'Q:' line while still *inside* the question — not
@@ -461,9 +469,10 @@ def _parse_card(block: str) -> Card:
                 # protection.
                 raise ParseError(
                     "card has a second 'Q:' line while its question is still being "
-                    f"read ({line!r}) -- if this is meant to be part of the question "
-                    "text rather than a new question, break up the line (e.g. a "
-                    f"leading space) so it doesn't start with 'Q:':\n{_sanitize_block_for_display(block)}"
+                    f"read ('{_sanitize_block_for_display(line)}') -- if this is meant to be "
+                    "part of the question text rather than a new question, break up the "
+                    f"line (e.g. a leading space) so it doesn't start with "
+                    f"'Q:':\n{_sanitize_block_for_display(block)}"
                 )
             section = "q"
             question_lines.append(Q_PREFIX.sub("", line, count=1))
@@ -476,9 +485,10 @@ def _parse_card(block: str) -> Card:
                 # reading "A: ..." (documenting the format itself, say).
                 raise ParseError(
                     "card has a second 'A:' line while its answer is still being "
-                    f"read ({line!r}) -- if this is meant to be part of the answer "
-                    "text rather than a new answer, break up the line (e.g. a "
-                    f"leading space) so it doesn't start with 'A:':\n{_sanitize_block_for_display(block)}"
+                    f"read ('{_sanitize_block_for_display(line)}') -- if this is meant to be "
+                    "part of the answer text rather than a new answer, break up the "
+                    f"line (e.g. a leading space) so it doesn't start with "
+                    f"'A:':\n{_sanitize_block_for_display(block)}"
                 )
             section = "a"
             answer_lines.append(A_PREFIX.sub("", line, count=1))
@@ -498,7 +508,7 @@ def _parse_card(block: str) -> Card:
             # about-to-be-lost content can.
             raise ParseError(
                 f"card has text before its first 'Q:' line, which would be silently "
-                f"discarded ({line!r}):\n{_sanitize_block_for_display(block)}"
+                f"discarded ('{_sanitize_block_for_display(line)}'):\n{_sanitize_block_for_display(block)}"
             )
 
     question = normalize_question("\n".join(question_lines).strip())
@@ -684,15 +694,16 @@ def _check_card_text(question: str, answer: str) -> None:
         for line in text.splitlines():
             if CARD_SEPARATOR.fullmatch(line):
                 raise ParseError(
-                    f"{field_name} contains a line of three or more dashes ({line!r}), which "
-                    "flashback reads as a card separator -- this would silently split the card "
-                    "in two on the next sync"
+                    f"{field_name} contains a line of three or more dashes "
+                    f"('{_sanitize_block_for_display(line)}'), which flashback reads as a card "
+                    "separator -- this would silently split the card in two on the next sync"
                 )
             if Q_PREFIX.match(line) or A_PREFIX.match(line):
                 raise ParseError(
-                    f"{field_name} contains a line starting with 'Q:' or 'A:' ({line!r}), which "
-                    "flashback reads as the start of a new question/answer -- this would "
-                    "silently corrupt the card's content on the next sync"
+                    f"{field_name} contains a line starting with 'Q:' or 'A:' "
+                    f"('{_sanitize_block_for_display(line)}'), which flashback reads as the "
+                    "start of a new question/answer -- this would silently corrupt the "
+                    "card's content on the next sync"
                 )
         for ch in text:
             if ch in ("\n", "\t"):
