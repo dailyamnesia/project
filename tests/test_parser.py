@@ -190,6 +190,71 @@ class TestParser(unittest.TestCase):
         self.assertNotIn("⁠", str(ctx.exception))
         self.assertIn("\\u2060", str(ctx.exception))
 
+    def test_missing_separator_error_escapes_non_breaking_space_in_block_context(self):
+        # Same gap, for U+00A0 (non-breaking space, see NO_BREAK_SPACE):
+        # renders identically to an ordinary space in every font, added to
+        # _check_card_text's rejected set well after this block dump's
+        # escaping was last updated (see the "seven classes" history in
+        # _sanitize_block_for_display's own docstring) -- confirmed to still
+        # reach `sync`'s stderr output completely unescaped, since nothing
+        # here knew about it.
+        text = "Q: first\nA: first answer\nQ: bad line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn(" ", str(ctx.exception))
+        self.assertIn("\\xa0", str(ctx.exception))
+
+    def test_missing_separator_error_escapes_invisible_math_operator_in_block_context(self):
+        # Same gap, for Unicode's "Invisible Mathematical Operators" block
+        # (U+2061-U+2064, see INVISIBLE_MATH_OPERATOR_RANGE): no visible
+        # glyph in any conformant font, added to _check_card_text's rejected
+        # set well after this block dump's escaping was last updated --
+        # confirmed to still reach `sync`'s stderr output completely
+        # unescaped, since nothing here knew about it.
+        text = "Q: first\nA: first answer\nQ: bad⁢line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("⁢", str(ctx.exception))
+        self.assertIn("\\u2062", str(ctx.exception))
+
+    def test_missing_separator_error_escapes_mongolian_vowel_separator_in_block_context(self):
+        # Same gap, for U+180E (Mongolian vowel separator, see
+        # MONGOLIAN_VOWEL_SEPARATOR): no visible glyph in modern rendering,
+        # added to _check_card_text's rejected set well after this block
+        # dump's escaping was last updated -- confirmed to still reach
+        # `sync`'s stderr output completely unescaped, since nothing here
+        # knew about it.
+        text = "Q: first\nA: first answer\nQ: bad᠎line\nA: second answer\n"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("᠎", str(ctx.exception))
+        self.assertIn("\\u180e", str(ctx.exception))
+
+    def test_missing_question_error_escapes_invisible_combining_mark_in_block_context(self):
+        # Same gap, for the cluster of invisible combining marks (category
+        # Mn, see INVISIBLE_COMBINING_MARK_CODEPOINTS -- U+034F COMBINING
+        # GRAPHEME JOINER here): no glyph of its own standing alone, added to
+        # _check_card_text's rejected set well after this block dump's
+        # escaping was last updated -- confirmed to still reach `sync`'s
+        # stderr output completely unescaped, since nothing here knew about
+        # it.
+        #
+        # Uses the "card has no question" error (an 'A:'-only block, so
+        # `_parse_card` never reaches a line matched by Q_PREFIX/A_PREFIX a
+        # second time) rather than the missing-separator error the tests
+        # above use: unlike Cf-category characters (control chars, bidi
+        # overrides, the byte-order mark, etc.), U+034F is category Mn,
+        # which Python's own `repr()` treats as printable -- so the
+        # `{line!r}` this module's other structural ParseErrors also
+        # interpolate would leak it raw regardless of this fix, and this
+        # test is specifically about `_sanitize_block_for_display`'s own
+        # escaping of the verbatim block dump, not that separate `!r` spot.
+        text = "A: bad͏line"
+        with self.assertRaises(ParseError) as ctx:
+            parse_deck(text)
+        self.assertNotIn("͏", str(ctx.exception))
+        self.assertIn("\\u034f", str(ctx.exception))
+
     def test_missing_separator_error_keeps_ordinary_block_context_readable(self):
         # The escaping above must be narrowly scoped to the two
         # terminal-manipulating classes -- real newlines and ordinary

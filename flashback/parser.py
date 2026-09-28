@@ -351,36 +351,53 @@ def _sanitize_block_for_display(block: str) -> str:
     contains reaches sync's `print(..., file=sys.stderr)` output raw. Every
     character class `_check_card_text` rejects from ever being *stored* in a
     card for "manipulates the terminal/display" reasons -- a control
-    character, a bidi-formatting override, Unicode's own LINE/PARAGRAPH
-    SEPARATOR (U+2028/U+2029, which most terminals render as a real line
-    break, injecting a phantom extra line into the very "real multi-line
-    context" this verbatim dump exists to show faithfully), a Unicode Tags-
-    block character (invisible in every font -- the "ASCII smuggling"
-    mechanism), the U+FEFF byte-order-mark, U+200B zero-width space (both
-    invisible copy-paste artifacts), and U+2060 word joiner (Unicode's own
-    recommended replacement for using the byte-order-mark as an invisible
-    line-break hint, see WORD_JOINER) -- can still reach here, unvalidated,
-    on the very same malformed block that's about to be rejected instead of
-    stored. An earlier version of this function escaped only the first two
-    of these (control characters and bidi overrides, the two classes
-    _check_card_text had when this function was first written) and was
-    never updated as _check_card_text grew the other classes, leaving this
-    block-dump side door as the one place any of them could still reach a
-    terminal raw. This escapes all seven classes, leaving real newlines,
-    tabs, and ordinary printable text (including non-ASCII) untouched,
-    preserving the readability the verbatim block exists for.
+    character, an unpaired Unicode surrogate, a bidi-formatting override,
+    Unicode's own LINE/PARAGRAPH SEPARATOR (U+2028/U+2029, which most
+    terminals render as a real line break, injecting a phantom extra line
+    into the very "real multi-line context" this verbatim dump exists to
+    show faithfully), a Unicode Tags-block character (invisible in every
+    font -- the "ASCII smuggling" mechanism), the U+FEFF byte-order-mark,
+    U+200B zero-width space (both invisible copy-paste artifacts), U+2060
+    word joiner (Unicode's own recommended replacement for using the
+    byte-order-mark as an invisible line-break hint, see WORD_JOINER),
+    U+00A0 non-breaking space (renders identically to an ordinary space),
+    Unicode's "Invisible Mathematical Operators" block (U+2061-U+2064),
+    U+180E Mongolian vowel separator, and the cluster of invisible
+    combining marks in INVISIBLE_COMBINING_MARK_CODEPOINTS -- can still
+    reach here, unvalidated, on the very same malformed block that's about
+    to be rejected instead of stored. An earlier version of this function
+    escaped only the first two of these (control characters and bidi
+    overrides, the two classes _check_card_text had when this function was
+    first written) and was never updated as _check_card_text grew the
+    other classes, leaving this block-dump side door as the one place any
+    of them could still reach a terminal raw -- and the same gap reopened
+    every time _check_card_text later grew a *further* class (the
+    surrogate check, NO_BREAK_SPACE, the invisible math operators, and the
+    Mongolian vowel separator/invisible combining marks were all added to
+    _check_card_text without a matching update here, so each one reached
+    this exact same unescaped side door again in turn; confirmed directly
+    for U+2062 and U+180E, both surviving raw in a "text before its first
+    Q:" ParseError's verbatim block dump). This now mirrors
+    `_check_card_text`'s full rejected-character set exactly, leaving real
+    newlines, tabs, and ordinary printable text (including non-ASCII)
+    untouched, preserving the readability the verbatim block exists for.
     """
     def _needs_escaping(ch: str) -> bool:
         if ch in ("\n", "\t"):
             return False
         return (
             unicodedata.category(ch) == "Cc"
+            or unicodedata.category(ch) == "Cs"
             or unicodedata.bidirectional(ch) in BIDI_FORMATTING_CLASSES
             or ch in LINE_SEPARATOR_CHARS
             or _is_unicode_tag_char(ch)
             or ch == ZERO_WIDTH_NO_BREAK_SPACE
             or ch == ZERO_WIDTH_SPACE
             or ch == WORD_JOINER
+            or ch == NO_BREAK_SPACE
+            or _is_invisible_math_operator(ch)
+            or ch == MONGOLIAN_VOWEL_SEPARATOR
+            or _is_invisible_combining_mark(ch)
         )
 
     return "".join(
